@@ -1,0 +1,19 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-py"
+}
+
+datasource db {
+  provider = "postgresql"  // or your database provider
+  url      = env("DATABASE_URL")
+}
+
+model Assessment {
+  id           String   @id @default(uuid())
+  userId       String
+  results      Json     // Stores geniusFactors, strengths, growthAreas
+  overallScore Int
+  message      String
+  createdAt    DateTime @default(now())
+}
