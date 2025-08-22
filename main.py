@@ -6,7 +6,7 @@ from routes.assessment_analyze import router as assessment_analyze_router
 
 from config import settings
 from utils.logger import logger
-
+from routes.parse_companies import router as excel_routes
 app = FastAPI()
 
 # CORS Middleware
@@ -22,7 +22,8 @@ app.add_middleware(
 app.include_router(assessment_router)
 app.include_router(dashboard_router)
 app.include_router(assessment_analyze_router)
-
+# Include Excel routes
+app.include_router(excel_routes)
 @app.on_event("startup")
 async def startup():
     logger.info("Application starting up...")

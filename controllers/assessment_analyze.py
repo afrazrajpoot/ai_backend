@@ -1,15 +1,5 @@
 
 
-
-
-
-
-
-
-
-
-
-
 from fastapi import HTTPException
 from schemas.assessment import AssessmentData
 from services.ai_service import AIService

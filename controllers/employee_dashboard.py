@@ -3,6 +3,14 @@ from services.ai_service import AIService
 from utils.logger import logger
 from datetime import datetime
 from fastapi import HTTPException
+from typing import Any
+from services.employee_services.ai_services import RecommendationService
+from pydantic import BaseModel
+
+class RecommendationRequest(BaseModel):
+    employee: dict
+    companies: list[dict]
+
 class DashboardController:
     @staticmethod
     async def get_dashboard(userId: str):
@@ -94,8 +102,26 @@ class DashboardController:
     def _get_monthly_stats(assessments):
         monthly_stats = {}
         for assess in assessments:
-            # Parse ISO format string to datetime if needed
             created_at = datetime.fromisoformat(assess['createdAt']) if isinstance(assess['createdAt'], str) else assess['createdAt']
             month = created_at.strftime("%b")
             monthly_stats[month] = monthly_stats.get(month, 0) + 1
         return [{"month": m, "completed": c} for m, c in sorted(monthly_stats.items())][-6:]
+
+    @staticmethod
+    async def recommend(data: RecommendationRequest):
+        """
+        API endpoint to recommend companies for an employee.
+        """
+        try:
+            employee = data.employee
+            companies = data.companies
+            if not employee or not companies:
+                raise HTTPException(status_code=400, detail="Both 'employee' and 'companies' fields are required")
+            
+            logger.info(f"Processing recommendation for employee: {employee.get('id', 'unknown')}")
+            recommendation = RecommendationService()
+            recommendations = recommendation.recommend_companies(employee, companies)  # Removed await
+            return {"recommendations": recommendations}
+        except Exception as e:
+            logger.error(f"Error in recommend: {str(e)}")
+            raise HTTPException(status_code=500, detail=str(e))
