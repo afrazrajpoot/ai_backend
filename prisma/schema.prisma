@@ -10,18 +10,27 @@ datasource db {
 }
 
 model User {
-  id             String   @id @default(uuid())
-  name           String?
-  email          String?  @unique
-  password       String?
-  role           String?
-  createdAt      DateTime @default(now())
-  emailVerified  DateTime?
-  image          String?
-  accounts       Account[]
-  sessions       Session[]
-
+  id            String      @id @default(uuid())
+  firstName     String?
+  lastName      String?
+  phoneNumber   String?
+  email         String?     @unique
+  password      String?
+  role          String?
+  createdAt     DateTime    @default(now())
+  emailVerified DateTime?
+  image         String?
+  accounts      Account[]
+  sessions      Session[]
+  employee      Employee?   @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  employeeId    String?     @unique
+ updatedAt    DateTime @updatedAt
+ salary       Int?
+ department   String?
+ hrId         String?
 }
+
+
 model Account {
   id                 String   @id @default(uuid())
   userId             String
@@ -43,7 +52,7 @@ model Account {
 model Session {
   id           String   @id @default(cuid())
   sessionToken String   @unique
-  userId       String   // Change from Int to String to match User.id
+  userId       String
   expires      DateTime
   user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
@@ -55,13 +64,54 @@ model VerificationToken {
   @@unique([identifier, token])
 }
 
-
-
-
-
 model Company {
   id           String   @id @default(uuid())
   companyDetail Json
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 }
+
+model Employee {
+  id            String         @id @default(uuid())
+  employeeId    String         @unique
+  firstName     String
+  lastName      String
+  email         String         @unique
+  phone         String?
+  address       String?
+  dateOfBirth   DateTime?
+  hireDate      DateTime?
+  department    String?
+  position      String?
+  manager       String?
+  salary        String?
+  bio           String?
+  avatar        String?
+  skills        String[]
+  education     Json?          // Dynamic field for education details
+  experience    Json?          // Dynamic field for experience details
+  resume        String?
+  user          User?
+  createdAt     DateTime       @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+
+model IndividualEmployeeReport {
+  id                                Int      @id @default(autoincrement())
+  createdAt                         DateTime @default(now())
+  updatedAt                         DateTime @updatedAt
+  userId                            String
+  executiveSummary                  String
+  hrId                              String?
+  departement                       String?
+  geniusFactorProfileJson            Json
+  currentRoleAlignmentAnalysisJson   Json
+  internalCareerOpportunitiesJson    Json
+  retentionAndMobilityStrategiesJson Json
+  developmentActionPlanJson          Json
+  personalizedResourcesJson          Json
+  dataSourcesAndMethodologyJson      Json
+}
+
+

@@ -1,32 +1,47 @@
+# main.py
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from routes.assessment import router as assessment_router
 from routes.employee_dashboard import router as dashboard_router
 from routes.assessment_analyze import router as assessment_analyze_router
-
 from config import settings
 from utils.logger import logger
 from routes.parse_companies import router as excel_routes
+
+# Import the Socket.IO instance from socket_manager
+from utils.socket_manager import sio
+import socketio
+# Create FastAPI app
 app = FastAPI()
 
-# CORS Middleware
+# CORS Middleware - MUST come first
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.ALLOWED_ORIGINS,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 # Include routers
 app.include_router(assessment_router)
 app.include_router(dashboard_router)
 app.include_router(assessment_analyze_router)
-# Include Excel routes
 app.include_router(excel_routes)
+
+# Create ASGI app with both FastAPI and Socket.IO
+socket_app = socketio.ASGIApp(sio, app)
+
 @app.on_event("startup")
 async def startup():
     logger.info("Application starting up...")
+    logger.info("Socket.IO notification system initialized")
 
 @app.on_event("shutdown")
 async def shutdown():
@@ -34,4 +49,36 @@ async def shutdown():
 
 @app.get("/")
 async def root():
-    return {"message": "Hello, FastAPI!"}
+    return {"message": "FastAPI with Socket.IO Notification System"}
+
+@app.get("/health")
+async def health_check():
+    return {
+        "status": "healthy",
+        "socket_io": "active"
+    }
+
+# Test endpoint for notifications
+@app.get("/test-notification/{user_id}")
+async def test_notification(user_id: str):
+    """Test endpoint to send a notification"""
+    from services.notification_service import NotificationService
+    from datetime import datetime
+    
+    test_data = {
+        'message': 'Test notification from API endpoint',
+        'progress': 75,
+        'status': 'processing',
+        'stage': 'test',
+        'details': {'test': True},
+        'timestamp': datetime.now().isoformat()
+    }
+    
+    await NotificationService.send_user_notification(user_id, test_data)
+    
+    return {"status": "test_notification_sent", "user_id": user_id}
+
+# Make sure to run the socket_app, not the regular app
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(socket_app, host="0.0.0.0", port=8000, reload=True)

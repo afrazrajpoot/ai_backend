@@ -22,6 +22,7 @@ class ParseCompaniesController:
                 try:
                     # Parse the file
                     text = await parse_file(file)
+                    print(text,'text')
                     processed_json = await process_text_with_langchain(text)
                     print(processed_json,'company detail')
                     # Save to database

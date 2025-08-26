@@ -1,0 +1,63 @@
+
+from typing import List, Dict
+
+from pydantic import BaseModel, Field
+
+
+from utils.logger import logger
+from config import settings
+# Pydantic Model for the Report Structure
+class GeniusFactorProfile(BaseModel):
+    primary_genius_factor: str = Field(description="Primary Genius Factor with confidence level")
+    description: str = Field(description="In-depth description of the primary factor")
+    key_strengths: List[str] = Field(description="Top 3 natural abilities with detailed descriptions")
+    secondary_genius_factor: str = Field(default="", description="Secondary Genius Factor with confidence level, if applicable")
+    secondary_description: str = Field(default="", description="Description of the secondary factor's complementary traits")
+    energy_sources: List[str] = Field(description="Top 3 activities that create flow state with detailed descriptions")
+
+class CurrentRoleAlignmentAnalysis(BaseModel):
+    alignment_score: str = Field(description="Alignment score out of 100")
+    assessment: str = Field(description="Thorough explanation of role alignment")
+    strengths_utilized: List[str] = Field(description="Aligned aspects with detailed descriptions")
+    underutilized_talents: List[str] = Field(description="Misaligned aspects with detailed descriptions")
+    retention_risk_level: str = Field(description="Retention risk level with rationale")
+
+class InternalCareerOpportunities(BaseModel):
+    primary_industry: str = Field(description="Primary industry aligned with Genius Factor")
+    secondary_industry: str = Field(description="Secondary industry with growth opportunities")
+    recommended_departments: List[str] = Field(description="Departments aligned with Genius Factor")
+    specific_role_suggestions: List[str] = Field(description="3-5 internal position suggestions")
+    career_pathways: Dict[str, str] = Field(description="Short-term and long-term career pathways")
+    transition_timeline: Dict[str, str] = Field(description="6-month, 1-year, 2-year pathways")
+    required_skill_development: List[str] = Field(description="Specific competencies to build")
+
+class RetentionAndMobilityStrategies(BaseModel):
+    retention_strategies: List[str] = Field(description="Organizational retention approaches")
+    internal_mobility_recommendations: List[str] = Field(description="Strategies for internal mobility")
+    development_support: List[str] = Field(description="Support mechanisms for development")
+
+class DevelopmentActionPlan(BaseModel):
+    thirty_day_goals: List[str] = Field(description="Immediate actionable steps")
+    ninety_day_goals: List[str] = Field(description="Short-term skill-building activities")
+    six_month_goals: List[str] = Field(description="Project leadership or career roadmap tasks")
+    networking_strategy: List[str] = Field(description="Key relationships to build with actions")
+
+class PersonalizedResources(BaseModel):
+    affirmations: List[str] = Field(description="Genius Factor-specific affirmations")
+    mindfulness_practices: List[str] = Field(description="Daily mindfulness practices")
+    reflection_questions: List[str] = Field(description="Weekly reflection questions")
+    learning_resources: List[str] = Field(description="Recommended courses, books, or tools")
+
+class DataSourcesAndMethodology(BaseModel):
+    data_sources: List[str] = Field(description="Sources used in the analysis")
+    methodology: str = Field(description="Summary of the assessment process")
+
+class IndividualEmployeeReport(BaseModel):
+    executive_summary: str = Field(description="Detailed overview of Genius Factors and recommendations")
+    genius_factor_profile: GeniusFactorProfile
+    current_role_alignment_analysis: CurrentRoleAlignmentAnalysis
+    internal_career_opportunities: InternalCareerOpportunities
+    retention_and_mobility_strategies: RetentionAndMobilityStrategies
+    development_action_plan: DevelopmentActionPlan
+    personalized_resources: PersonalizedResources
+    data_sources_and_methodology: DataSourcesAndMethodology

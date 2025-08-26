@@ -44,3 +44,4 @@ class AssessmentPart(BaseModel):
 
 class AssessmentData(BaseModel):
     data: List[AssessmentPart]
+    userId: str
