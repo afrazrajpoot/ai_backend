@@ -15,7 +15,6 @@ from utils.logger import logger
 from config import settings
 from utils.models import IndividualEmployeeReport
 
-# Existing AIService Class with Updates
 class AIService:
     _prompts = None
     _vector_store = None
@@ -156,138 +155,112 @@ class AIService:
             }
         except Exception as e:
             return {"status": "error", "error": str(e)}
-
     @classmethod
-    async def analyze_majority_answers(cls, majority_results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    async def analyze_majority_answers(cls, majority_results: List[Dict[str, Any]]) -> str:
         vector_store = cls.initialize_vector_store()
         genius_factors = []
-        all_responses = {}
+        all_responses = ""
+        factor_counts_part_iv = {}
+        all_response_letters = set()
 
-        # Collect all responses from Genius Factor parts
-        factor_counts = {}  # track counts to determine top 2 factors
+        # Collect responses and identify genius factors from all parts
         for part in majority_results:
             part_name = part['part']
             responses = part.get('majorityOptions', [])
-            all_responses[part_name] = {'responses': responses, 'maxCount': part.get('maxCount', 0)}
-
-            if "Genius Factor Mapping" in part_name:
+            all_responses += f"Part: {part_name}\nResponses: {', '.join(responses)}\nMax Count: {part.get('maxCount', 0)}\n\n"
+            # Track responses from Part IV specifically
+            if part_name == "Part IV: Genius Factor Mapping Assessment":
                 for response in responses:
-                    factor_counts[response] = factor_counts.get(response, 0) + 1
+                    factor_counts_part_iv[response] = factor_counts_part_iv.get(response, 0) + part.get('maxCount', 0)
+            # Collect all response letters across parts for secondary factor fallback
+            all_response_letters.update(responses)
 
-        # Sort factors by frequency (descending) to get primary and secondary
-        sorted_factors = sorted(factor_counts.items(), key=lambda x: x[1], reverse=True)
+        # Determine primary and secondary genius factors (letters)
+        sorted_factors = sorted(factor_counts_part_iv.items(), key=lambda x: x[1], reverse=True)
         if not sorted_factors:
-            return {
-                "status": "success",
-                "message": "No Genius Factors identified in assessment",
-                "allResponses": all_responses
+            # If no Part IV responses, use the most frequent letter from other parts
+            all_counts = {}
+            for part in majority_results:
+                for response in part.get('majorityOptions', []):
+                    all_counts[response] = all_counts.get(response, 0) + part.get('maxCount', 0)
+            sorted_all = sorted(all_counts.items(), key=lambda x: x[1], reverse=True)
+            primary_letter = sorted_all[0][0] if sorted_all else 'A'  # Default to 'A' if no responses
+            secondary_letter = sorted_all[1][0] if len(sorted_all) > 1 else 'A'
+        else:
+            primary_letter = sorted_factors[0][0]
+            # Select secondary letter: prefer Part IV, then other parts, then default
+            if len(sorted_factors) > 1:
+                secondary_letter = sorted_factors[1][0]
+            else:
+                # Look for other responses in Part IV or other parts
+                other_letters = all_response_letters - {primary_letter}
+                secondary_letter = next(iter(other_letters), 'A')  # Default to 'A' if no other letters
+
+        # Map letters to full genius names
+        def get_genius_name(letter):
+            mapping = {
+                'A': "Tech Genius",
+                'B': "Social Genius",
+                'C': "Visual Genius",
+                'D': "Word Genius",
+                'E': "Athletic Genius",
+                'F': "Number Genius",
+                'G': "Eco Genius",
+                'H': "Word Genius (Communication Focus)",
+                'I': "Spiritual Genius"
             }
+            return mapping.get(letter, "Unknown Genius")
 
-        # Ensure at least two genius factors
-        primary_factor = sorted_factors[0][0]
-        secondary_factor = sorted_factors[1][0] if len(sorted_factors) > 1 else None
-        genius_factors = [primary_factor]
-        if secondary_factor:
-            genius_factors.append(secondary_factor)
+        primary_name = get_genius_name(primary_letter)
+        secondary_name = get_genius_name(secondary_letter)
+        genius_factors = [primary_name, secondary_name]
 
-        retriever = vector_store.as_retriever(
-            search_type="mmr",
-            search_kwargs={"k": 12, "fetch_k": 20, "lambda_mult": 0.7}
-        )
-
+        # Define queries tailored to each PDF source
         queries = [
-            f"Genius Factors career recommendations industry mapping: {', '.join(genius_factors)}",
-            "retention internal mobility career development strategies",
-            "genius factor assessment scoring interpretation guidelines",
-            f"hybrid genius factor combinations involving {', '.join(genius_factors)}",
-            f"career pathways and roles for {', '.join(genius_factors)}",
-            "cross-industry opportunities for genius factors",
-            "employee retention strategies aligned with genius factors",
-            f"detailed characteristics and skills for {', '.join(genius_factors)}"
+            f"Genius factor definitions and characteristics for {primary_name} and {secondary_name}",
+            f"Primary and secondary industries for genius factors {', '.join(genius_factors)}",
+            f"Content from Genius Factor Framework Analysis of {', '.join(genius_factors)}",
+            f"Get all data Employee Mobility and Retention Research Findings for {', '.join(genius_factors)}"
         ]
 
+        # Map queries to source files (basenames)
+        source_files = [
+            "(68 Questions) Genius Factor Assessment for Fortune 1000 HR Departments.pdf",
+            "Genius Factor to Fortune 1000 Industry Mapping.pdf",
+            "Genius Factor Framework Analysis.pdf",
+            "retention & internal mobility research_findings.pdf"
+        ]
+
+        query_source_pairs = list(zip(queries, source_files))
+
+        # Retrieve top 1 document from each source using the corresponding query and metadata filter
         all_docs = []
-        for query in queries:
-            logger.info(f"Searching for: {query}")
+        for query, source_basename in query_source_pairs:
+            logger.info(f"Searching in {source_basename} for: {query}")
+            retriever = vector_store.as_retriever(
+                search_type="similarity",
+                search_kwargs={"k": 1, "filter": {"source_file": source_basename}}
+            )
             docs = await retriever.aget_relevant_documents(query)
-            all_docs.extend(docs)
+            if docs:
+                all_docs.append(docs[0])
 
-        seen_content = set()
-        unique_docs = [
-            doc for doc in all_docs
-            if doc.page_content.replace('\n', ' ').strip() not in seen_content and len(doc.page_content.strip()) >= 50
-        ]
-
-        results_by_source = {}
-        career_recommendations = []
-        industry_mappings = []
-        assessment_guidelines = []
-        genius_factor_details = []
-        retention_insights = []
-
-        for doc in unique_docs:
-            content = doc.page_content.replace('\n', ' ').strip()
-            source = doc.metadata.get('source_file', os.path.basename(doc.metadata.get('source', 'unknown')))
+        # Format retrieved data as plain text
+        result_text = f"Genius Factors Identified:\nPrimary: {primary_name} ({primary_letter})\nSecondary: {secondary_name} ({secondary_letter})\n\nResponses:\n{all_responses}\nRetrieved Information:\n"
+        for i, doc in enumerate(all_docs, 1):
+            content = doc.page_content.replace('\n', ' ').strip()[:1500]
+            source = doc.metadata.get('source_file', 'unknown')
             page = doc.metadata.get('page', 0)
+            result_text += f"Document {i} - Source: {source} (Page {page})\nContent: {content}\n\n"
 
-            doc_info = {
-                "content": content[:1500],
-                "source": source,
-                "page": page,
-                "chunk_id": hashlib.md5(content.encode()).hexdigest()[:8]
-            }
-            if source not in results_by_source:
-                results_by_source[source] = []
-            results_by_source[source].append(doc_info)
-
-            content_lower = content.lower()
-            if any(factor.lower() in content_lower for factor in genius_factors):
-                if "career" in content_lower or "role" in content_lower or "job" in content_lower:
-                    career_recommendations.append(doc_info)
-                elif "fortune" in content_lower or "industry" in content_lower or "mapping" in content_lower:
-                    industry_mappings.append(doc_info)
-                else:
-                    genius_factor_details.append(doc_info)
-            if "assessment" in content_lower or "scoring" in content_lower:
-                assessment_guidelines.append(doc_info)
-            if "retention" in content_lower or "mobility" in content_lower:
-                retention_insights.append(doc_info)
-
-        total_documents = len(seen_content)
-        sources_coverage = list(results_by_source.keys())
-
-        logger.info(f"📊 Retrieved {total_documents} unique chunks from {len(sources_coverage)} sources")
-
-        return {
-            "status": "success",
-            "assessmentData": {
-                "identifiedFactors": genius_factors,
-                "allResponses": all_responses,
-                "totalDocumentsRetrieved": total_documents,
-                "sourcesCovered": sources_coverage
-            },
-            "retrievedData": {
-                "bySource": results_by_source,
-                "careerRecommendations": career_recommendations,
-                "industryMappings": industry_mappings,
-                "assessmentGuidelines": assessment_guidelines,
-                "geniusFactorDetails": genius_factor_details,
-                "retentionInsights": retention_insights
-            },
-            "summary": {
-                "primaryFactors": genius_factors,
-                "documentsPerSource": {source: len(docs) for source, docs in results_by_source.items()},
-                "totalRelevantChunks": total_documents,
-                "dataCompleteness": "comprehensive" if total_documents >= 10 else "partial"
-            },
-            "vectorStoreStats": cls.get_vector_store_stats()
-        }
-
+        logger.info(f"Retrieved {len(all_docs)} documents (one from each source)")
+        return result_text
     @classmethod
-    async def generate_career_recommendation(cls, analysis_result: Dict[str, Any]) -> Dict[str, Any]:
+    async def generate_career_recommendation(cls, analysis_result: str) -> Dict[str, Any]:
         try:
-            if analysis_result.get('status') != 'success':
-                return {"status": "error", "message": "Invalid analysis results provided"}
+            # Check if analysis_result is empty or invalid
+            if not analysis_result or not isinstance(analysis_result, str):
+                return {"status": "error", "message": "Invalid or empty analysis results provided"}
 
             llm = ChatOpenAI(
                 api_key=settings.OPENAI_API_KEY,
@@ -314,26 +287,30 @@ class AIService:
                 partial_variables={"format_instructions": parser.get_format_instructions()}
             )
 
-            # Convert analysis data to string
-            data_str = json.dumps(analysis_result, indent=2)
-            logger.debug(f"Analysis data: {data_str}")
+            # Log the analysis data
+            logger.debug(f"Analysis data: {analysis_result}")
 
-            # --- DEBUG: Render and log the full prompt ---
-            full_prompt_str = report_prompt.format(analysis_data=data_str)
+            # Render and log the full prompt
+            full_prompt_str = report_prompt.format(analysis_data=analysis_result)
             logger.debug(f"Full prompt sent to LLM:\n{full_prompt_str}")
             print(f"\n===== FULL PROMPT TO LLM =====\n{full_prompt_str}\n==============================\n")
 
             # Generate the report
             chain = report_prompt | llm | parser
-            output = await chain.ainvoke({"analysis_data": data_str})
+            output = await chain.ainvoke({"analysis_data": analysis_result})
 
             return {
                 "status": "success",
                 "report": output.dict(),
                 "metadata": {
-                    "processingTimestamp": "07:03 PM PKT, August 25, 2025",
-                    "modelUsed": "Azure Chat Model",
-                    "dataSourcesUsed": analysis_result.get('assessmentData', {}).get('sourcesCovered', [])
+                    "processingTimestamp": "06:47 PM PKT, August 29, 2025",
+                    "modelUsed": "gpt-4o-mini",
+                    "dataSourcesUsed": [
+                        "(68 Questions) Genius Factor Assessment for Fortune 1000 HR Departments.pdf",
+                        "Genius Factor Framework Analysis.pdf",
+                        "Genius Factor to Fortune 1000 Industry Mapping.pdf",
+                        "retention & internal mobility research_findings.pdf"
+                    ]
                 }
             }
 

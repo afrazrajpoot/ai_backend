@@ -78,7 +78,8 @@ async def hr_dashboard(sid, data):
         reports = await prisma.individualemployeereport.find_many(
             where={'hrId': hr_id}
         )
-
+        total_employees = await prisma.user.count(where={'hrId': hr_id})
+        print(total_employees,'total employee')
         # Count assessments by department
         for report in reports:
             if report.departement:
@@ -104,7 +105,8 @@ async def hr_dashboard(sid, data):
                 'name': dept_name,
                 'completion': assessment_count,  # This is now the raw count of assessments
                 'color': color,
-                'completed_assessments': assessment_count
+                'completed_assessments': assessment_count,
+                'total_employees': total_employees
             })
 
         # Convert rooms (bidict) to a JSON-serializable dictionary
@@ -117,6 +119,7 @@ async def hr_dashboard(sid, data):
             'reports_info',
             {
                 'dashboardData': dashboard_data,
+                'total_employees': total_employees,
                 'rooms': rooms
             },
             to=sid
