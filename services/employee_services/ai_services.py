@@ -211,6 +211,8 @@ class JobRecommendationService:
                     "location": j.location,
                     "type": j.type,
                     "match_score": score,
+                    "salary": j.salary,
+                    
                     "recruiter": {
                         "id": j.recruiter.id if getattr(j, "recruiter", None) else None,
                         "firstName": j.recruiter.firstName if getattr(j, "recruiter", None) else None,
