@@ -61,3 +61,8 @@ class IndividualEmployeeReport(BaseModel):
     development_action_plan: DevelopmentActionPlan
     personalized_resources: PersonalizedResources
     data_sources_and_methodology: DataSourcesAndMethodology
+    genius_factor_score: int
+
+
+class EmployeeRequest(BaseModel):
+    employeeId: str

@@ -6,8 +6,9 @@ from routes.employee_dashboard import router as dashboard_router
 from routes.assessment_analyze import router as assessment_analyze_router
 from config import settings
 from utils.logger import logger
-from routes.parse_companies import router as excel_routes
 
+from controllers.job_controller import router as job_router
+from controllers.employee_parse_controller import router as employee_router
 # Import the Socket.IO instance from socket_manager
 from utils.socket_manager import sio
 import socketio
@@ -33,8 +34,9 @@ app.add_middleware(
 app.include_router(assessment_router)
 app.include_router(dashboard_router)
 app.include_router(assessment_analyze_router)
-app.include_router(excel_routes)
 
+app.include_router(job_router)
+app.include_router(employee_router)
 # Create ASGI app with both FastAPI and Socket.IO
 socket_app = socketio.ASGIApp(sio, app)
 

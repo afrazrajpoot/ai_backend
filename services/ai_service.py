@@ -162,26 +162,39 @@ class AIService:
         vector_store = cls.initialize_vector_store()
         genius_factors = []
         all_responses = {}
-        
+
+        # Collect all responses from Genius Factor parts
+        factor_counts = {}  # track counts to determine top 2 factors
         for part in majority_results:
             part_name = part['part']
-            responses = part['majorityOptions']
+            responses = part.get('majorityOptions', [])
             all_responses[part_name] = {'responses': responses, 'maxCount': part.get('maxCount', 0)}
+
             if "Genius Factor Mapping" in part_name:
-                genius_factors.extend(responses)
-        
-        if not genius_factors:
+                for response in responses:
+                    factor_counts[response] = factor_counts.get(response, 0) + 1
+
+        # Sort factors by frequency (descending) to get primary and secondary
+        sorted_factors = sorted(factor_counts.items(), key=lambda x: x[1], reverse=True)
+        if not sorted_factors:
             return {
                 "status": "success",
                 "message": "No Genius Factors identified in assessment",
                 "allResponses": all_responses
             }
-        
+
+        # Ensure at least two genius factors
+        primary_factor = sorted_factors[0][0]
+        secondary_factor = sorted_factors[1][0] if len(sorted_factors) > 1 else None
+        genius_factors = [primary_factor]
+        if secondary_factor:
+            genius_factors.append(secondary_factor)
+
         retriever = vector_store.as_retriever(
             search_type="mmr",
             search_kwargs={"k": 12, "fetch_k": 20, "lambda_mult": 0.7}
         )
-        
+
         queries = [
             f"Genius Factors career recommendations industry mapping: {', '.join(genius_factors)}",
             "retention internal mobility career development strategies",
@@ -192,33 +205,41 @@ class AIService:
             "employee retention strategies aligned with genius factors",
             f"detailed characteristics and skills for {', '.join(genius_factors)}"
         ]
-        
+
         all_docs = []
         for query in queries:
             logger.info(f"Searching for: {query}")
             docs = await retriever.aget_relevant_documents(query)
             all_docs.extend(docs)
-        
+
         seen_content = set()
-        unique_docs = [doc for doc in all_docs if doc.page_content.replace('\n', ' ').strip() not in seen_content and len(doc.page_content.strip()) >= 50]
-        
+        unique_docs = [
+            doc for doc in all_docs
+            if doc.page_content.replace('\n', ' ').strip() not in seen_content and len(doc.page_content.strip()) >= 50
+        ]
+
         results_by_source = {}
         career_recommendations = []
         industry_mappings = []
         assessment_guidelines = []
         genius_factor_details = []
         retention_insights = []
-        
+
         for doc in unique_docs:
             content = doc.page_content.replace('\n', ' ').strip()
             source = doc.metadata.get('source_file', os.path.basename(doc.metadata.get('source', 'unknown')))
             page = doc.metadata.get('page', 0)
-            
-            doc_info = {"content": content[:1500], "source": source, "page": page, "chunk_id": hashlib.md5(content.encode()).hexdigest()[:8]}
+
+            doc_info = {
+                "content": content[:1500],
+                "source": source,
+                "page": page,
+                "chunk_id": hashlib.md5(content.encode()).hexdigest()[:8]
+            }
             if source not in results_by_source:
                 results_by_source[source] = []
             results_by_source[source].append(doc_info)
-            
+
             content_lower = content.lower()
             if any(factor.lower() in content_lower for factor in genius_factors):
                 if "career" in content_lower or "role" in content_lower or "job" in content_lower:
@@ -231,12 +252,12 @@ class AIService:
                 assessment_guidelines.append(doc_info)
             if "retention" in content_lower or "mobility" in content_lower:
                 retention_insights.append(doc_info)
-        
+
         total_documents = len(seen_content)
         sources_coverage = list(results_by_source.keys())
-        
+
         logger.info(f"📊 Retrieved {total_documents} unique chunks from {len(sources_coverage)} sources")
-        
+
         return {
             "status": "success",
             "assessmentData": {
@@ -275,6 +296,7 @@ class AIService:
                 max_tokens=3000
             )
 
+            # Load system prompt
             prompt_file_path = Path(__file__).parent.parent / "utils" / "prompts.json"
             with open(prompt_file_path, 'r') as file:
                 prompt_data = json.load(file)
@@ -292,12 +314,17 @@ class AIService:
                 partial_variables={"format_instructions": parser.get_format_instructions()}
             )
 
-            chain = report_prompt | llm | parser
-
+            # Convert analysis data to string
             data_str = json.dumps(analysis_result, indent=2)
             logger.debug(f"Analysis data: {data_str}")
 
+            # --- DEBUG: Render and log the full prompt ---
+            full_prompt_str = report_prompt.format(analysis_data=data_str)
+            logger.debug(f"Full prompt sent to LLM:\n{full_prompt_str}")
+            print(f"\n===== FULL PROMPT TO LLM =====\n{full_prompt_str}\n==============================\n")
+
             # Generate the report
+            chain = report_prompt | llm | parser
             output = await chain.ainvoke({"analysis_data": data_str})
 
             return {

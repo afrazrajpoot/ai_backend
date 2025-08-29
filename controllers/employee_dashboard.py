@@ -4,12 +4,13 @@ from utils.logger import logger
 from datetime import datetime
 from fastapi import HTTPException
 from typing import Any
-from services.employee_services.ai_services import RecommendationService
+from services.employee_services.ai_services import JobRecommendationService
 from pydantic import BaseModel
-
+from utils.models import EmployeeRequest
+from services.employee_services.employee_dashboard import get_dashboard_service
 class RecommendationRequest(BaseModel):
-    employee: dict
-    companies: list[dict]
+    recruiter_id: str
+    employee_id: str
 
 class DashboardController:
     @staticmethod
@@ -113,15 +114,30 @@ class DashboardController:
         API endpoint to recommend companies for an employee.
         """
         try:
-            employee = data.employee
-            companies = data.companies
-            if not employee or not companies:
-                raise HTTPException(status_code=400, detail="Both 'employee' and 'companies' fields are required")
+            recruiter_id = data.recruiter_id
+            employee_id = data.employee_id
+            if not recruiter_id or not employee_id:
+                raise HTTPException(
+                    status_code=400, 
+                    detail="Both 'employee_id' and 'recruiter_id' are required"
+                )
             
-            logger.info(f"Processing recommendation for employee: {employee.get('id', 'unknown')}")
-            recommendation = RecommendationService()
-            recommendations = recommendation.recommend_companies(employee, companies)  # Removed await
+            logger.info(f"Processing recommendation for recruiter: {recruiter_id}, employee: {employee_id}")
+
+            recommendation = JobRecommendationService()
+            recommendations = await recommendation.recommend_jobs_for_employee(employee_id, recruiter_id)
+            print(recommendations,'recommendations')
             return {"recommendations": recommendations}
         except Exception as e:
             logger.error(f"Error in recommend: {str(e)}")
             raise HTTPException(status_code=500, detail=str(e))
+
+
+    @staticmethod
+    async def get_dashboard_controller(data: EmployeeRequest):
+        dashboard_data, error = await get_dashboard_service(data.employeeId)
+
+        if error:
+            raise HTTPException(status_code=404, detail=error)
+
+        return dashboard_data

@@ -1,11 +1,9 @@
-// prisma/schema.prisma
-
 generator client {
   provider = "prisma-client-py"
 }
 
 datasource db {
-  provider = "postgresql"  // or your database provider
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -18,18 +16,25 @@ model User {
   password      String?
   role          String?
   createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
   emailVerified DateTime?
   image         String?
+ position       String?
+
+  department    String?
+  hrId          String?
+ salary        String?
   accounts      Account[]
   sessions      Session[]
   employee      Employee?   @relation(fields: [employeeId], references: [id], onDelete: Cascade)
   employeeId    String?     @unique
- updatedAt    DateTime @updatedAt
- salary       Int?
- department   String?
- hrId         String?
-}
 
+  // Jobs posted by this user (Recruiter)
+  jobs          Job[]       @relation("RecruiterJobs")
+
+  // Applications submitted by this user (Candidate)
+  applications  Application[] 
+}
 
 model Account {
   id                 String   @id @default(uuid())
@@ -76,26 +81,25 @@ model Employee {
   employeeId    String         @unique
   firstName     String
   lastName      String
-  email         String         @unique
-  phone         String?
+
+
   address       String?
   dateOfBirth   DateTime?
   hireDate      DateTime?
-  department    String?
-  position      String?
-  manager       String?
-  salary        String?
+
+ manager        String?
+
+ 
   bio           String?
   avatar        String?
   skills        String[]
-  education     Json?          // Dynamic field for education details
-  experience    Json?          // Dynamic field for experience details
+  education     Json?
+  experience    Json?
   resume        String?
   user          User?
   createdAt     DateTime       @default(now())
-  updatedAt    DateTime @updatedAt
+  updatedAt     DateTime       @updatedAt
 }
-
 
 model IndividualEmployeeReport {
   id                                Int      @id @default(autoincrement())
@@ -105,6 +109,7 @@ model IndividualEmployeeReport {
   executiveSummary                  String
   hrId                              String?
   departement                       String?
+  geniusFactorScore                 Int
   geniusFactorProfileJson            Json
   currentRoleAlignmentAnalysisJson   Json
   internalCareerOpportunitiesJson    Json
@@ -114,4 +119,62 @@ model IndividualEmployeeReport {
   dataSourcesAndMethodologyJson      Json
 }
 
+model Job {
+  id             String      @id @default(uuid())
+  title          String
+  description    String
+  location       String?
+  salary         Int?
+  type           JobType     @default(FULL_TIME)
+  status         JobStatus   @default(OPEN)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
 
+  // Relation to Recruiter (User)
+  recruiter      User        @relation("RecruiterJobs", fields: [recruiterId], references: [id])
+  recruiterId    String
+
+  // Applications for this job
+  applications   Application[]
+}
+
+model Application {
+  id          String   @id @default(uuid())
+  coverLetter String?
+  resumeUrl   String?
+  createdAt   DateTime @default(now())
+
+  // Relation to Job
+  job       Job    @relation(fields: [jobId], references: [id])
+  jobId     String
+
+  // Relation to Candidate (User)
+  candidate User   @relation(fields: [candidateId], references: [id])
+  candidateId String
+}
+
+model AiCareerRecommendation {
+  id             String      @id @default(uuid())
+  employeeId   String
+  careerRecommendation  String
+}
+
+enum JobType {
+  FULL_TIME
+  PART_TIME
+  CONTRACT
+  INTERNSHIP
+  FREELANCE
+}
+
+enum JobStatus {
+  OPEN
+  CLOSED
+  DRAFT
+}
+
+enum UserRole {
+  CANDIDATE
+  RECRUITER
+  ADMIN
+}
