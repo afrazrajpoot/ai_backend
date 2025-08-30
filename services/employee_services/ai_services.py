@@ -1,4 +1,3 @@
-# services/rag_job_recommendation_service.py
 import os
 import json
 import logging
@@ -115,34 +114,35 @@ class JobRecommendationService:
         self.vstore = JobVectorStore.get(self.embeddings)
 
     async def recommend_jobs_for_employee(self, user_id: str, recruiter_id: str) -> List[Dict[str, Any]]:
+        print(user_id, 'user id')
         db = Prisma()
         await db.connect()
         try:
             # Build/load FAISS store
             await self.vstore.build_or_load(db)
-
+            
             # Fetch user and expand related employee
             user = await db.user.find_unique(
                 where={"id": user_id},
                 include={"employee": True}
             )
-            if not user or not user.employee:
-                raise ValueError("User or related Employee not found")
+            print(user, 'user my user')
+            if not user:
+                raise ValueError("User not found")
 
-            employee = user.employee
-
-            # Build query text for FAISS search using rich employee info
+            # Build employee_info from User or Employee fields, prioritizing User fields if Employee is None
             employee_info = {
-                "firstName": employee.firstName,
-                "lastName": employee.lastName,
-                "bio": employee.bio,
-                "skills": employee.skills,
-                "education": employee.education,
-                "experience": employee.experience,
-                "position": getattr(user, "position", None),
-                "department": getattr(user, "department", None),
-                "salary": getattr(user, "salary", None)
+                "firstName": user.firstName or "",
+                "lastName": user.lastName or "",
+                "bio": getattr(user.employee, "bio", "") if user.employee else "",
+                "skills": getattr(user.employee, "skills", []) if user.employee else [],
+                "education": getattr(user.employee, "education", []) if user.employee else [],
+                "experience": getattr(user.employee, "experience", []) if user.employee else [],
+                "position": getattr(user, "position", ""),
+                "department": getattr(user, "department", ""),
+                "salary": getattr(user, "salary", "")
             }
+            print(employee_info, 'employee info')  # Debug log
 
             query_text = json.dumps(employee_info)
 
@@ -212,7 +212,6 @@ class JobRecommendationService:
                     "type": j.type,
                     "match_score": score,
                     "salary": j.salary,
-                    
                     "recruiter": {
                         "id": j.recruiter.id if getattr(j, "recruiter", None) else None,
                         "firstName": j.recruiter.firstName if getattr(j, "recruiter", None) else None,
