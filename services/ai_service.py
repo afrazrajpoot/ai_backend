@@ -1,20 +1,21 @@
 import json
 import os
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, TypedDict, Annotated
 import hashlib
-import pickle
-from pydantic import BaseModel, Field
+
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_community.vectorstores import FAISS
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.prompts import PromptTemplate
 from langchain.output_parsers import PydanticOutputParser
+from langchain_community.tools.tavily_search import TavilySearchResults
+from langgraph.graph import StateGraph, END
+import operator
 from utils.logger import logger
 from config import settings
 from utils.models import IndividualEmployeeReport
-
 class AIService:
     _prompts = None
     _vector_store = None
@@ -292,13 +293,14 @@ class AIService:
 
             # Render and log the full prompt
             full_prompt_str = report_prompt.format(analysis_data=analysis_result)
-            logger.debug(f"Full prompt sent to LLM:\n{full_prompt_str}")
-            print(f"\n===== FULL PROMPT TO LLM =====\n{full_prompt_str}\n==============================\n")
-
-            # Generate the report
+            # logger.debug(f"Full prompt sent to LLM:\n{full_prompt_str}")
+            # print(f"\n===== FULL PROMPT TO LLM =====\n{full_prompt_str}\n==============================\n")
+        
             chain = report_prompt | llm | parser
             output = await chain.ainvoke({"analysis_data": analysis_result})
-
+            risk_analysis = await cls._perform_risk_analysis(output.dict())
+            # # Generate the report
+            print(risk_analysis,'risk analysis')
             return {
                 "status": "success",
                 "report": output.dict(),
@@ -317,3 +319,149 @@ class AIService:
         except Exception as e:
             logger.error(f"Error in generate_career_recommendation: {str(e)}")
             return {"status": "error", "error": str(e)}
+    @classmethod
+    async def _perform_risk_analysis(cls, report: Dict[str, Any]) -> Dict[str, Any]:
+        # Define state for LangGraph
+        class State(TypedDict):
+            report: Dict[str, Any]
+            search_results: Annotated[List[Dict[str, Any]], operator.add]
+            analysis: str
+            scores: Dict[str, Any]
+            genius_factors: List[str]  # Add this to state
+            company: str  # Add this to state
+
+        # Extract genius factors and company from report
+        genius_factors = []
+        if "primary_genius_factor" in report:
+            genius_factors.append(report["primary_genius_factor"])
+        if "secondary_genius_factor" in report:
+            genius_factors.append(report["secondary_genius_factor"])
+        
+        # Get company from report or use default
+        company = report.get("company", "Fortune 1000 Company")
+
+        # Node to perform Tavily searches based on report
+        async def search_node(state: State) -> State:
+            search_results = []
+            try:
+                tavily = TavilySearchResults(api_key=settings.TAVILY_API_KEY, max_results=5)  # Reduced for testing
+                
+                # More specific query
+                query = (
+                    f"employee retention internal mobility statistics {company} and this is genius factor profile {genius_factors} "
+                )
+                
+                results = tavily.invoke({"query": query})
+                if results and isinstance(results, list):
+                    search_results.extend(results)
+                
+                logger.info(f"Found {len(search_results)} search results")
+                print(search_results, 'search results')
+                
+            except Exception as e:
+                logger.error(f"Search error: {e}")
+                # Add some fallback data
+                search_results = [{
+                    "title": "Fallback: General Retention Data",
+                    "content": "General employee retention statistics for large companies show average turnover rates of 10-15% annually.",
+                    "url": "https://example.com/fallback"
+                }]
+
+            return {"search_results": search_results}
+        
+        # Node to analyze search results and compute scores based on report
+        async def analyze_node(state: State) -> State:
+            llm = ChatOpenAI(
+                api_key=settings.OPENAI_API_KEY,
+                model="gpt-4o-mini",
+                temperature=0.2,
+                max_tokens=2000
+            )
+
+            # Create the prompt template with correct input variables
+            analysis_prompt = PromptTemplate(
+                template=(
+                    "You are an HR risk analyst. Based on the employee report: {report}\n\n"
+                    "And the following web search results on internal mobility and retention: {search_results}\n\n"
+                    "Analyze the genius factor score and internal retention mobility risk score for the company.\n"
+                    "Provide:\n"
+                    "- Genius Factor Score (0-100, higher means better fit based on company culture and roles for the genius factors in the report)\n"
+                    "- Internal Retention Mobility Risk Score (0-100, higher means higher risk of leaving/lack of mobility)\n"
+                    "- Brief reasoning.\n\n"
+                    "Even if results are limited, estimate scores based on general trends.\n"
+                    "Output as JSON: {{\n  \"scores\": {{\n    \"genius_factor_score\": int,\n    \"retention_mobility_risk_score\": int,\n    \"reasoning\": str\n  }}\n}}"
+                ),
+                input_variables=["report", "search_results"]
+            )
+
+            try:
+                # Format the prompt with actual data
+                formatted_prompt = await analysis_prompt.ainvoke({
+                    "report": json.dumps(state["report"], indent=2),
+                    "search_results": json.dumps(state["search_results"], indent=2)
+                })
+                
+                # Get response from LLM
+                response = await llm.ainvoke(formatted_prompt)
+                
+                content = response.content.strip()
+                
+                # Debug: Print the raw response
+                logger.debug(f"LLM Response: {content}")
+                
+                # Try to extract JSON from the response
+                if not content.startswith("{"):
+                    # If response doesn't start with JSON, try to extract it
+                    import re
+                    json_match = re.search(r'\{.*\}', content, re.DOTALL)
+                    if json_match:
+                        content = json_match.group(0)
+                
+                # Parse the JSON response
+                analysis_json = json.loads(content)
+                scores = analysis_json.get("scores", {})
+                
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON parsing error: {e}")
+                logger.error(f"Raw content that failed to parse: {content}")
+                scores = {
+                    "genius_factor_score": 50,
+                    "retention_mobility_risk_score": 50,
+                    "reasoning": "Error in analysis - using default scores"
+                }
+            except Exception as e:
+                logger.error(f"Error in analyze_node: {e}")
+                scores = {
+                    "genius_factor_score": 50,
+                    "retention_mobility_risk_score": 50,
+                    "reasoning": f"Analysis error: {str(e)}"
+                }
+
+            analysis_summary = "Risk analysis completed based on employee report and web search results."
+
+            return {"analysis": analysis_summary, "scores": scores}
+
+        # Build the LangGraph
+        graph = StateGraph(State)
+        graph.add_node("search", search_node)
+        graph.add_node("analyze", analyze_node)
+        graph.add_edge("search", "analyze")
+        graph.add_edge("analyze", END)
+        graph.set_entry_point("search")
+        app = graph.compile()
+
+        # Invoke the graph
+        initial_state = {
+            "report": report,
+            "search_results": [],
+            "analysis": "",
+            "scores": {},
+            "genius_factors": genius_factors,
+            "company": company
+        }
+        final_state = await app.ainvoke(initial_state)
+
+        return {
+            "analysis_summary": final_state["analysis"],
+            "scores": final_state["scores"]
+        }

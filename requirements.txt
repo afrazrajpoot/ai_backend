@@ -16,3 +16,4 @@ pyexcel
 pdfplumber
 pyexcel pyexcel-ods3
 bcrypt
+langgraph

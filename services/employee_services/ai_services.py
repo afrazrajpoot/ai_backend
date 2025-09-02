@@ -148,7 +148,7 @@ class JobRecommendationService:
 
             # Retrieve top jobs filtered by recruiter
             retrieved_docs = self.vstore.retrieve_jobs(query_text, recruiter_id)
-
+ 
             if not retrieved_docs:
                 logger.info("No jobs retrieved for this recruiter")
                 return []
