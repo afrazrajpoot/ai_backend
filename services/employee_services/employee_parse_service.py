@@ -3,6 +3,7 @@ import pandas as pd
 import pyexcel_ods3
 from prisma import Prisma
 import bcrypt
+import json  # Add json import for serialization
 
 db = Prisma()
 
@@ -80,23 +81,46 @@ async def parse_and_save_employees(file, hr_id: str):
             default_password = "Pa$$w0rd!"
             hashed_password = bcrypt.hashpw(default_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
+            # --- Create Employee ---
             employee = await db.user.create(
-    data={
-        "firstName": str(row.get("firstName", "")).strip(),
-        "lastName": str(row.get("lastName", "")).strip(),
-        "email": email,
-        "phoneNumber": str(row.get("phoneNumber", "")).strip(),
-        "position": str(row.get("position", "")).strip(),
-        "salary": str(row.get("salary", "")) if row.get("salary") else None,  # <--- convert to string
-        "department": str(row.get("department", "")).strip(),
-        "password": hashed_password,
-        "hrId": hr_id,
-        "role": "Employee"
-    }
-)
+                data={
+                    "firstName": str(row.get("firstName", "")).strip(),
+                    "lastName": str(row.get("lastName", "")).strip(),
+                    "email": email,
+                    "phoneNumber": str(row.get("phoneNumber", "")).strip(),
+                    "position": str(row.get("position", "")).strip(),
+                    "salary": str(row.get("salary", "")) if row.get("salary") else None,
+                    "department": str(row.get("department", "")).strip(),
+                    "password": hashed_password,
+                    "hrId": hr_id,
+                    "role": "Employee"
+                }
+            )
 
+            # --- Create Department entry linked with userId ---
+            dept_name = str(row.get("department", "")).strip()
+            position = str(row.get("position", "")).strip()
+            if dept_name and position:
+                try:
+                    # Convert department name to a JSON array
+                    dept_names = [name.strip() for name in dept_name.split(",") if name.strip()]
+                    positions = [pos.strip() for pos in position.split(",") if pos.strip()]
+                    positions_json = json.dumps(positions)  # Serialize positions to JSON string
+                    # Serialize the list to a JSON string
+                    dept_names_json = json.dumps(dept_names)
+                    await db.department.create(
+                        data={
+                            "name": dept_names_json,  # Pass JSON string
+                            "hrId": hr_id,
+                            "position": positions_json,
+                            "userId": employee.id
+                        }
+                    )
+                    print(f"[INFO] Department {dept_names} added for user {employee.email}")
+                except Exception as e:
+                    print(f"[ERROR] Failed to add department for {employee.email}: {e}")
 
-            # Manually create the dictionary for return
+            # --- Append to return list ---
             inserted_employees.append({
                 "id": employee.id,
                 "firstName": employee.firstName,

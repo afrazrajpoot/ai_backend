@@ -98,6 +98,7 @@ class AssessmentController:
                 "status": "success",
                 "userId": input_data.userId,
                 "report": recommendations.get("report"),
+                "risk_analysis": recommendations.get("risk_analysis"),
                 "metadata": recommendations.get("metadata")
             }
 

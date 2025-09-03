@@ -35,7 +35,13 @@ model User {
   // Applications submitted by this user (Candidate)
   applications  Application[] 
 }
-
+model Department {
+  id      String   @id @default(uuid())
+  name    Json
+  position Json
+  hrId     String
+  userId  String
+}
 model Account {
   id                 String   @id @default(uuid())
   userId             String
@@ -117,6 +123,7 @@ model IndividualEmployeeReport {
   developmentActionPlanJson          Json
   personalizedResourcesJson          Json
   dataSourcesAndMethodologyJson      Json
+  risk_analysis                      Json
 }
 
 model Job {
@@ -158,6 +165,7 @@ model AiCareerRecommendation {
   employeeId   String
   careerRecommendation  String
 }
+
 
 enum JobType {
   FULL_TIME

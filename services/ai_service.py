@@ -16,6 +16,7 @@ import operator
 from utils.logger import logger
 from config import settings
 from utils.models import IndividualEmployeeReport
+import asyncio
 class AIService:
     _prompts = None
     _vector_store = None
@@ -304,6 +305,7 @@ class AIService:
             return {
                 "status": "success",
                 "report": output.dict(),
+                "risk_analysis": risk_analysis,
                 "metadata": {
                     "processingTimestamp": "06:47 PM PKT, August 29, 2025",
                     "modelUsed": "gpt-4o-mini",
@@ -319,6 +321,7 @@ class AIService:
         except Exception as e:
             logger.error(f"Error in generate_career_recommendation: {str(e)}")
             return {"status": "error", "error": str(e)}
+
     @classmethod
     async def _perform_risk_analysis(cls, report: Dict[str, Any]) -> Dict[str, Any]:
         # Define state for LangGraph
@@ -327,8 +330,10 @@ class AIService:
             search_results: Annotated[List[Dict[str, Any]], operator.add]
             analysis: str
             scores: Dict[str, Any]
-            genius_factors: List[str]  # Add this to state
-            company: str  # Add this to state
+            trends: Dict[str, Any]
+            recommendations: List[str]
+            genius_factors: List[str]
+            company: str
 
         # Extract genius factors and company from report
         genius_factors = []
@@ -344,52 +349,86 @@ class AIService:
         async def search_node(state: State) -> State:
             search_results = []
             try:
-                tavily = TavilySearchResults(api_key=settings.TAVILY_API_KEY, max_results=5)  # Reduced for testing
+                tavily = TavilySearchResults(api_key=settings.TAVILY_API_KEY, max_results=5)
                 
-                # More specific query
-                query = (
-                    f"employee retention internal mobility statistics {company} and this is genius factor profile {genius_factors} "
-                )
+                # Multiple queries for comprehensive analysis
+                queries = [
+                    f"employee retention statistics trends {company} 2024",
+                    f"internal mobility programs best practices {company}",
+                    f"employee turnover prevention strategies {company}",
+                    f"career development trends {company} {genius_factors}",
+                    f"talent retention innovative approaches {company}"
+                ]
                 
-                results = tavily.invoke({"query": query})
-                if results and isinstance(results, list):
-                    search_results.extend(results)
+                for query in queries:
+                    try:
+                        results = tavily.invoke({"query": query})
+                        if results and isinstance(results, list):
+                            search_results.extend(results)
+                        await asyncio.sleep(0.1)  # Small delay between queries
+                    except Exception as e:
+                        logger.warning(f"Query failed for '{query}': {e}")
+                        continue
                 
                 logger.info(f"Found {len(search_results)} search results")
-                print(search_results, 'search results')
                 
             except Exception as e:
                 logger.error(f"Search error: {e}")
-                # Add some fallback data
+                # Add fallback data
                 search_results = [{
-                    "title": "Fallback: General Retention Data",
-                    "content": "General employee retention statistics for large companies show average turnover rates of 10-15% annually.",
-                    "url": "https://example.com/fallback"
+                    "title": "Industry Retention Trends",
+                    "content": "Current trends show increased focus on internal mobility, with companies investing in upskilling and career pathing to reduce turnover.",
+                    "url": "https://example.com/industry-trends"
                 }]
 
             return {"search_results": search_results}
         
-        # Node to analyze search results and compute scores based on report
+        # Node to analyze search results and compute comprehensive analysis
         async def analyze_node(state: State) -> State:
             llm = ChatOpenAI(
                 api_key=settings.OPENAI_API_KEY,
                 model="gpt-4o-mini",
                 temperature=0.2,
-                max_tokens=2000
+                max_tokens=3000
             )
 
-            # Create the prompt template with correct input variables
+            # Enhanced prompt template
             analysis_prompt = PromptTemplate(
                 template=(
-                    "You are an HR risk analyst. Based on the employee report: {report}\n\n"
-                    "And the following web search results on internal mobility and retention: {search_results}\n\n"
-                    "Analyze the genius factor score and internal retention mobility risk score for the company.\n"
-                    "Provide:\n"
-                    "- Genius Factor Score (0-100, higher means better fit based on company culture and roles for the genius factors in the report)\n"
-                    "- Internal Retention Mobility Risk Score (0-100, higher means higher risk of leaving/lack of mobility)\n"
-                    "- Brief reasoning.\n\n"
-                    "Even if results are limited, estimate scores based on general trends.\n"
-                    "Output as JSON: {{\n  \"scores\": {{\n    \"genius_factor_score\": int,\n    \"retention_mobility_risk_score\": int,\n    \"reasoning\": str\n  }}\n}}"
+                    "You are an HR risk analyst specializing in employee retention and mobility. "
+                    "Based on the employee report: {report}\n\n"
+                    "And the following web search results on internal mobility and retention trends: {search_results}\n\n"
+                    "Provide a comprehensive analysis including:\n\n"
+                    "1. SCORES (0-100 scale):\n"
+                    "   - Genius Factor Alignment Score (higher = better cultural/role fit)\n"
+                    "   - Retention Risk Score (higher = higher risk of leaving)\n"
+                    "   - Mobility Opportunity Score (higher = better internal mobility prospects)\n\n"
+                    "2. TRENDS ANALYSIS:\n"
+                    "   - Current retention trends in the industry/company\n"
+                    "   - Internal mobility patterns and innovations\n"
+                    "   - Risk factors specific to this employee profile\n\n"
+                    "3. RECOMMENDATIONS (3-5 actionable items):\n"
+                    "   - Specific retention strategies\n"
+                    "   - Mobility enhancement opportunities\n"
+                    "   - Risk mitigation actions\n\n"
+                    "Output as JSON: {{\n"
+                    "  \"scores\": {{\n"
+                    "    \"genius_factor_score\": int,\n"
+                    "    \"retention_risk_score\": int,\n"
+                    "    \"mobility_opportunity_score\": int\n"
+                    "  }},\n"
+                    "  \"trends\": {{\n"
+                    "    \"retention_trends\": str,\n"
+                    "    \"mobility_trends\": str,\n"
+                    "    \"risk_factors\": str\n"
+                    "  }},\n"
+                    "  \"recommendations\": [\n"
+                    "    \"recommendation1\",\n"
+                    "    \"recommendation2\",\n"
+                    "    \"recommendation3\"\n"
+                    "  ],\n"
+                    "  \"reasoning\": \"brief overall reasoning\"\n"
+                    "}}"
                 ),
                 input_variables=["report", "search_results"]
             )
@@ -411,35 +450,68 @@ class AIService:
                 
                 # Try to extract JSON from the response
                 if not content.startswith("{"):
-                    # If response doesn't start with JSON, try to extract it
                     import re
                     json_match = re.search(r'\{.*\}', content, re.DOTALL)
                     if json_match:
                         content = json_match.group(0)
                 
                 # Parse the JSON response
-                analysis_json = json.loads(content)
-                scores = analysis_json.get("scores", {})
+                analysis_data = json.loads(content)
+                
+                scores = analysis_data.get("scores", {
+                    "genius_factor_score": 50,
+                    "retention_risk_score": 50,
+                    "mobility_opportunity_score": 50
+                })
+                
+                trends = analysis_data.get("trends", {
+                    "retention_trends": "Unable to analyze trends",
+                    "mobility_trends": "Unable to analyze mobility trends",
+                    "risk_factors": "Unable to identify specific risk factors"
+                })
+                
+                recommendations = analysis_data.get("recommendations", [
+                    "Implement regular career development conversations",
+                    "Create clear internal mobility pathways",
+                    "Enhance mentorship programs"
+                ])
                 
             except json.JSONDecodeError as e:
                 logger.error(f"JSON parsing error: {e}")
                 logger.error(f"Raw content that failed to parse: {content}")
                 scores = {
                     "genius_factor_score": 50,
-                    "retention_mobility_risk_score": 50,
-                    "reasoning": "Error in analysis - using default scores"
+                    "retention_risk_score": 50,
+                    "mobility_opportunity_score": 50
                 }
+                trends = {
+                    "retention_trends": "Error in trend analysis",
+                    "mobility_trends": "Error in mobility analysis",
+                    "risk_factors": "Analysis error occurred"
+                }
+                recommendations = ["Conduct manual analysis due to system error"]
             except Exception as e:
                 logger.error(f"Error in analyze_node: {e}")
                 scores = {
                     "genius_factor_score": 50,
-                    "retention_mobility_risk_score": 50,
-                    "reasoning": f"Analysis error: {str(e)}"
+                    "retention_risk_score": 50,
+                    "mobility_opportunity_score": 50
                 }
+                trends = {
+                    "retention_trends": f"Analysis error: {str(e)}",
+                    "mobility_trends": f"Analysis error: {str(e)}",
+                    "risk_factors": f"Analysis error: {str(e)}"
+                }
+                recommendations = ["Please review manually due to analysis error"]
 
-            analysis_summary = "Risk analysis completed based on employee report and web search results."
+            analysis_summary = "Comprehensive risk analysis completed with trends and recommendations."
 
-            return {"analysis": analysis_summary, "scores": scores}
+            return {
+                "analysis": analysis_summary,
+                "scores": scores,
+                "trends": trends,
+                "recommendations": recommendations
+            }
 
         # Build the LangGraph
         graph = StateGraph(State)
@@ -456,6 +528,8 @@ class AIService:
             "search_results": [],
             "analysis": "",
             "scores": {},
+            "trends": {},
+            "recommendations": [],
             "genius_factors": genius_factors,
             "company": company
         }
@@ -463,5 +537,9 @@ class AIService:
 
         return {
             "analysis_summary": final_state["analysis"],
-            "scores": final_state["scores"]
+            "scores": final_state["scores"],
+            "trends": final_state["trends"],
+            "recommendations": final_state["recommendations"],
+            "genius_factors": genius_factors,
+            "company": company
         }
