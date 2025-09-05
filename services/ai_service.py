@@ -300,8 +300,7 @@ class AIService:
             chain = report_prompt | llm | parser
             output = await chain.ainvoke({"analysis_data": analysis_result})
             risk_analysis = await cls._perform_risk_analysis(output.dict())
-            # # Generate the report
-            print(risk_analysis,'risk analysis')
+         
             return {
                 "status": "success",
                 "report": output.dict(),

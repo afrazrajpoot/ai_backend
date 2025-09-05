@@ -19,11 +19,11 @@ model User {
   updatedAt     DateTime    @updatedAt
   emailVerified DateTime?
   image         String?
- position       String?
+  position      String[] 
 
-  department    String?
+  department    String[]    // 👈 now it's an array of strings
   hrId          String?
- salary        String?
+  salary        String?
   accounts      Account[]
   sessions      Session[]
   employee      Employee?   @relation(fields: [employeeId], references: [id], onDelete: Cascade)
@@ -37,10 +37,16 @@ model User {
 }
 model Department {
   id      String   @id @default(uuid())
-  name    Json
-  position Json
+  name    String
+
   hrId     String
-  userId  String
+userId      String
+  ingoing   Json[]
+  outgoing  Json[]
+  promotion String?
+  transfer  String?
+  createdAt                         DateTime @default(now())
+  updatedAt                         DateTime @updatedAt
 }
 model Account {
   id                 String   @id @default(uuid())

@@ -88,9 +88,9 @@ async def parse_and_save_employees(file, hr_id: str):
                     "lastName": str(row.get("lastName", "")).strip(),
                     "email": email,
                     "phoneNumber": str(row.get("phoneNumber", "")).strip(),
-                    "position": str(row.get("position", "")).strip(),
+                    "position": [str(row.get("position", "")).strip()],
                     "salary": str(row.get("salary", "")) if row.get("salary") else None,
-                    "department": str(row.get("department", "")).strip(),
+                    "department": [str(row.get("department", "")).strip()],
                     "password": hashed_password,
                     "hrId": hr_id,
                     "role": "Employee"
@@ -103,20 +103,20 @@ async def parse_and_save_employees(file, hr_id: str):
             if dept_name and position:
                 try:
                     # Convert department name to a JSON array
-                    dept_names = [name.strip() for name in dept_name.split(",") if name.strip()]
+               
                     positions = [pos.strip() for pos in position.split(",") if pos.strip()]
                     positions_json = json.dumps(positions)  # Serialize positions to JSON string
-                    # Serialize the list to a JSON string
-                    dept_names_json = json.dumps(dept_names)
+                    userIdlIST = [employee.id]
+                    userIdJson = json.dumps(userIdlIST)
+                  
                     await db.department.create(
                         data={
-                            "name": dept_names_json,  # Pass JSON string
+                            "name": dept_name,  # Pass JSON string
+                            "userId": employee.id,  # Link to the created user
                             "hrId": hr_id,
-                            "position": positions_json,
-                            "userId": employee.id
                         }
                     )
-                    print(f"[INFO] Department {dept_names} added for user {employee.email}")
+                    print(f"[INFO] Department {dept_name} added for user {employee.email}")
                 except Exception as e:
                     print(f"[ERROR] Failed to add department for {employee.email}: {e}")
 
