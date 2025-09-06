@@ -3,6 +3,7 @@ from prisma import Prisma
 import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta,timezone
+import json
 # Create Socket.IO server with proper CORS configuration
 sio = socketio.AsyncServer(
     async_mode='asgi',
@@ -433,7 +434,7 @@ async def internal_mobility(sid, data):
 
 @sio.event
 async def admin_dashboard(sid, data):
-    """Endpoint to fetch admin-level dashboard data using only IndividualEmployeeReport"""
+    """Endpoint to fetch admin-level dashboard data for HR-specific metrics"""
     try:
         # Extract adminId from the incoming data
         admin_id = data.get('adminId')
@@ -447,104 +448,88 @@ async def admin_dashboard(sid, data):
 
         # Get all reports
         reports = await prisma.individualemployeereport.find_many()
+        
+        # Get all departments for mobility data
+        departments = await prisma.department.find_many()
 
         if not reports:
             await sio.emit('reports_info', {'error': 'No reports found'}, to=sid)
             return
 
-        # Process reports data
+        # Process reports data (KEEP EXISTING CODE)
         reports_data = []
+        employee_risk_details = []
+        
         for report in reports:
-            # Extract scores from risk_analysis JSON
-            retention_risk_score = 50  # default value
-            mobility_opportunity_score = 50  # default value
+            retention_risk_score = 50
+            mobility_opportunity_score = 50
+            risk_factors = []
+            mitigation_strategies = []
             
             if report.risk_analysis and isinstance(report.risk_analysis, dict):
                 risk_scores = report.risk_analysis.get('scores', {})
                 retention_risk_score = risk_scores.get('retention_risk_score', 50)
                 mobility_opportunity_score = risk_scores.get('mobility_opportunity_score', 50)
+                risk_factors = report.risk_analysis.get('risk_factors', [])
+                mitigation_strategies = report.risk_analysis.get('mitigation_strategies', [])
+            
+            risk_category = "Medium"
+            if retention_risk_score <= 30:
+                risk_category = "Low"
+            elif retention_risk_score > 60:
+                risk_category = "High"
             
             reports_data.append({
                 'hr_id': report.hrId or 'Unknown HR',
+                'employee_id': report.userId or 'Unknown Employee',
                 'department': report.departement or 'Unknown',
                 'retention_risk_score': retention_risk_score,
                 'mobility_opportunity_score': mobility_opportunity_score,
                 'genius_factor_score': report.geniusFactorScore,
-                'created_month': report.createdAt.strftime('%b'),
                 'created_year_month': report.createdAt.strftime('%Y-%m'),
                 'created_at': report.createdAt
+            })
+            
+            employee_risk_details.append({
+                'employee_id': report.userId or 'Unknown Employee',
+                'hr_id': report.hrId or 'Unknown HR',
+                'department': report.departement or 'Unknown',
+                'risk_score': retention_risk_score,
+                'risk_category': risk_category,
+                'mobility_score': mobility_opportunity_score,
+                'genius_factor': report.geniusFactorScore,
+                'risk_factors': risk_factors,
+                'mitigation_strategies': mitigation_strategies,
+                'report_id': report.id,
+                'created_at': report.createdAt.strftime('%Y-%m-%d')
             })
 
         df = pd.DataFrame(reports_data)
 
-        # Calculate basic statistics from reports
+        # Calculate basic statistics (KEEP EXISTING CODE)
         total_reports = len(reports)
-        
-        # Get unique HR IDs and departments from reports
         unique_hr_ids = df['hr_id'].unique()
         unique_departments = df['department'].unique()
 
-        # 1. HR STATISTICS
+        # HR Statistics (KEEP EXISTING CODE)
         hr_stats = {}
         for hr_id in unique_hr_ids:
             hr_reports = df[df['hr_id'] == hr_id]
             hr_stats[hr_id] = {
                 'report_count': len(hr_reports),
-                'department_count': hr_reports['department'].nunique(),
+                'employee_count': hr_reports['employee_id'].nunique(),
                 'avg_retention_risk': round(hr_reports['retention_risk_score'].mean(), 1) if not hr_reports.empty else 0,
                 'avg_mobility_score': round(hr_reports['mobility_opportunity_score'].mean(), 1) if not hr_reports.empty else 0,
                 'avg_genius_factor': round(hr_reports['genius_factor_score'].mean(), 1) if not hr_reports.empty else 0
             }
 
-        # 2. DEPARTMENT STATISTICS
-        department_stats = {}
-        for department in unique_departments:
-            dept_reports = df[df['department'] == department]
-            department_stats[department] = {
-                'report_count': len(dept_reports),
-                'hr_count': dept_reports['hr_id'].nunique(),
-                'avg_retention_risk': round(dept_reports['retention_risk_score'].mean(), 1) if not dept_reports.empty else 0,
-                'avg_mobility_score': round(dept_reports['mobility_opportunity_score'].mean(), 1) if not dept_reports.empty else 0,
-                'avg_genius_factor': round(dept_reports['genius_factor_score'].mean(), 1) if not dept_reports.empty else 0
-            }
-
-        # 3. ASSESSMENT COMPLETION RATE BY DEPARTMENT
-        # Since we don't have employee counts, we'll use report counts as relative metrics
-        assessment_completion_by_dept = {}
-        total_reports_all_depts = total_reports
-        
-        for department, stats in department_stats.items():
-            # Using report count as a proxy for completion (since we don't have employee counts)
-            completion_rate = round((stats['report_count'] / total_reports_all_depts * 100), 1) if total_reports_all_depts > 0 else 0
-            
-            assessment_completion_by_dept[department] = {
-                'total_reports': stats['report_count'],
-                'completion_rate': completion_rate,
-                'avg_retention_risk': stats['avg_retention_risk']
-            }
-
-        # 4. INTERNAL MOBILITY TRENDS
-        mobility_trends = {}
-        quarterly_trend = {}
-        if not df.empty:
-            # Monthly mobility trend (reports created per month)
-            monthly_mobility = df.groupby('created_year_month').size()
-            for year_month, count in monthly_mobility.items():
-                mobility_trends[year_month] = int(count)
-            
-            # Quarterly trend
-            df['quarter'] = df['created_at'].dt.to_period('Q')
-            quarterly_mobility = df.groupby('quarter').size()
-            quarterly_trend = {str(q): int(count) for q, count in quarterly_mobility.items()}
-
-        # 5. RETENTION RISK DISTRIBUTION
+        # Overall Retention Risk and Genius Factor Distribution (KEEP EXISTING CODE)
         retention_risk_distribution = {
             'Low (0-30)': len(df[df['retention_risk_score'] <= 30]),
             'Medium (31-60)': len(df[(df['retention_risk_score'] > 30) & (df['retention_risk_score'] <= 60)]),
             'High (61-100)': len(df[df['retention_risk_score'] > 60])
         }
 
-        # 6. GENIUS FACTOR DISTRIBUTION
         genius_factor_distribution = {
             'Poor (0-20)': len(df[df['genius_factor_score'] <= 20]),
             'Fair (21-40)': len(df[(df['genius_factor_score'] > 20) & (df['genius_factor_score'] <= 40)]),
@@ -553,72 +538,192 @@ async def admin_dashboard(sid, data):
             'Excellent (81-100)': len(df[df['genius_factor_score'] > 80])
         }
 
-        # 7. GROWTH TRENDS
-        growth_trends = {}
-        if not df.empty:
-            # HR growth by report activity
-            hr_report_activity = df.groupby(['hr_id', 'created_year_month']).size().reset_index(name='report_count')
-            
+        # === MODIFIED MOBILITY DATA SECTION ===
+        # Generate last 6 months for trend data
+        from datetime import datetime
+        from dateutil.relativedelta import relativedelta
+        
+        current_date = datetime.now()
+        last_6_months = []
+        for i in range(5, -1, -1):  # Last 6 months including current
+            month = current_date - relativedelta(months=i)
+            last_6_months.append(month.strftime('%Y-%m'))
+        
+        # Initialize mobility data structures
+        mobility_trends = {}
+        hr_mobility_trends = {hr_id: {} for hr_id in unique_hr_ids}
+        department_mobility_trends = {dept: {} for dept in unique_departments}
+        
+        # Initialize all months with zero values
+        for month in last_6_months:
+            mobility_trends[month] = {
+                'ingoing': 0,
+                'outgoing': 0,
+                'promotions': 0,
+                'transfers': 0
+            }
             for hr_id in unique_hr_ids:
-                hr_data = hr_report_activity[hr_report_activity['hr_id'] == hr_id]
-                growth_data = {row['created_year_month']: row['report_count'] for _, row in hr_data.iterrows()}
-                growth_trends[hr_id] = growth_data
+                hr_mobility_trends[hr_id][month] = {
+                    'ingoing': 0,
+                    'outgoing': 0,
+                    'promotions': 0,
+                    'transfers': 0
+                }
+            for dept in unique_departments:
+                department_mobility_trends[dept][month] = {
+                    'ingoing': 0,
+                    'outgoing': 0,
+                    'promotions': 0,
+                    'transfers': 0
+                }
+        
+        # Process department mobility data
+        for dept in departments:
+            if not dept.createdAt:
+                continue
+                
+            dept_month = dept.createdAt.strftime('%Y-%m')
+            if dept_month not in last_6_months:
+                continue
+                
+            # Count ingoing/outgoing
+            ingoing_count = len(dept.ingoing) if dept.ingoing and isinstance(dept.ingoing, list) else 0
+            outgoing_count = len(dept.outgoing) if dept.outgoing and isinstance(dept.outgoing, list) else 0
+            
+            # Update overall mobility data
+            mobility_trends[dept_month]['ingoing'] += ingoing_count
+            mobility_trends[dept_month]['outgoing'] += outgoing_count
+            if dept.promotion:
+                mobility_trends[dept_month]['promotions'] += 1
+            if dept.transfer:
+                mobility_trends[dept_month]['transfers'] += 1
+            
+            # Update HR-specific mobility data
+            if dept.hrId and dept.hrId in hr_mobility_trends:
+                hr_mobility_trends[dept.hrId][dept_month]['ingoing'] += ingoing_count
+                hr_mobility_trends[dept.hrId][dept_month]['outgoing'] += outgoing_count
+                if dept.promotion:
+                    hr_mobility_trends[dept.hrId][dept_month]['promotions'] += 1
+                if dept.transfer:
+                    hr_mobility_trends[dept.hrId][dept_month]['transfers'] += 1
+            
+            # Update department-specific mobility data
+            if dept.name and dept.name in department_mobility_trends:
+                department_mobility_trends[dept.name][dept_month]['ingoing'] += ingoing_count
+                department_mobility_trends[dept.name][dept_month]['outgoing'] += outgoing_count
+                if dept.promotion:
+                    department_mobility_trends[dept.name][dept_month]['promotions'] += 1
+                if dept.transfer:
+                    department_mobility_trends[dept.name][dept_month]['transfers'] += 1
+        # === END MODIFIED SECTION ===
 
-        # Calculate overall averages
+        # Enhanced Risk Analysis by HR (KEEP EXISTING CODE)
+        risk_analysis_by_hr = {}
+        for hr_id in unique_hr_ids:
+            hr_reports = df[df['hr_id'] == hr_id]
+            hr_employee_details = [e for e in employee_risk_details if e['hr_id'] == hr_id]
+            
+            # Risk distribution
+            risk_distribution = {
+                'Low (0-30)': len(hr_reports[hr_reports['retention_risk_score'] <= 30]),
+                'Medium (31-60)': len(hr_reports[(hr_reports['retention_risk_score'] > 30) & (hr_reports['retention_risk_score'] <= 60)]),
+                'High (61-100)': len(hr_reports[hr_reports['retention_risk_score'] > 60])
+            }
+            
+            # Monthly trend
+            monthly_trend = {}
+            if not hr_reports.empty:
+                hr_monthly = hr_reports.groupby('created_year_month').size()
+                for year_month, count in hr_monthly.items():
+                    monthly_trend[year_month] = int(count)
+            
+            # Department Distribution
+            dept_distribution = {}
+            hr_depts = hr_reports['department'].unique()
+            for dept in hr_depts:
+                dept_reports = hr_reports[hr_reports['department'] == dept]
+                dept_distribution[dept] = {
+                    'count': len(dept_reports),
+                    'employee_count': dept_reports['employee_id'].nunique(),
+                    'avg_retention_risk': round(dept_reports['retention_risk_score'].mean(), 1) if not dept_reports.empty else 0,
+                    'avg_mobility_score': round(dept_reports['mobility_opportunity_score'].mean(), 1) if not dept_reports.empty else 0,
+                    'avg_genius_factor': round(dept_reports['genius_factor_score'].mean(), 1) if not dept_reports.empty else 0,
+                    'risk_distribution': {
+                        'Low (0-30)': len(dept_reports[dept_reports['retention_risk_score'] <= 30]),
+                        'Medium (31-60)': len(dept_reports[(dept_reports['retention_risk_score'] > 30) & (dept_reports['retention_risk_score'] <= 60)]),
+                        'High (61-100)': len(dept_reports[dept_reports['retention_risk_score'] > 60])
+                    },
+                    'genius_factor_distribution': {
+                        'Poor (0-20)': len(dept_reports[dept_reports['genius_factor_score'] <= 20]),
+                        'Fair (21-40)': len(dept_reports[(dept_reports['genius_factor_score'] > 20) & (dept_reports['genius_factor_score'] <= 40)]),
+                        'Good (41-60)': len(dept_reports[(dept_reports['genius_factor_score'] > 40) & (dept_reports['genius_factor_score'] <= 60)]),
+                        'Very Good (61-80)': len(dept_reports[(dept_reports['genius_factor_score'] > 60) & (dept_reports['genius_factor_score'] <= 80)]),
+                        'Excellent (81-100)': len(dept_reports[dept_reports['genius_factor_score'] > 80])
+                    }
+                }
+            
+            risk_analysis_by_hr[hr_id] = {
+                'risk_distribution': risk_distribution,
+                'monthly_trend': monthly_trend,
+                'department_distribution': dept_distribution,
+                'employee_risk_details': hr_employee_details,
+                'total_reports': len(hr_reports),
+                'total_employees': hr_reports['employee_id'].nunique(),
+                'avg_retention_risk': round(hr_reports['retention_risk_score'].mean(), 1) if not hr_reports.empty else 0
+            }
+
+        # Calculate overall averages (KEEP EXISTING CODE)
         overall_avg_retention_risk = round(df['retention_risk_score'].mean(), 1) if not df.empty else 0
         overall_avg_mobility = round(df['mobility_opportunity_score'].mean(), 1) if not df.empty else 0
         overall_avg_genius = round(df['genius_factor_score'].mean(), 1) if not df.empty else 0
 
-        # Prepare the comprehensive admin response
+        # Prepare chart data for department-specific HR analysis (KEEP EXISTING CODE)
+        hr_dept_chart_data = {}
+        for hr_id in unique_hr_ids:
+            hr_dept_chart_data[hr_id] = {
+                'departments': {},
+                'risk_distribution': risk_analysis_by_hr[hr_id]['risk_distribution'],
+                'monthly_trend': risk_analysis_by_hr[hr_id]['monthly_trend']
+            }
+            for dept in risk_analysis_by_hr[hr_id]['department_distribution']:
+                hr_dept_chart_data[hr_id]['departments'][dept] = {
+                    'avg_retention_risk': risk_analysis_by_hr[hr_id]['department_distribution'][dept]['avg_retention_risk'],
+                    'avg_mobility_score': risk_analysis_by_hr[hr_id]['department_distribution'][dept]['avg_mobility_score'],
+                    'avg_genius_factor': risk_analysis_by_hr[hr_id]['department_distribution'][dept]['avg_genius_factor'],
+                    'risk_distribution': risk_analysis_by_hr[hr_id]['department_distribution'][dept]['risk_distribution'],
+                    'genius_factor_distribution': risk_analysis_by_hr[hr_id]['department_distribution'][dept]['genius_factor_distribution']
+                }
+
+        # Prepare the response (MODIFIED MOBILITY SECTION)
         response_data = {
             'overallMetrics': {
                 'total_reports': total_reports,
+                'total_employees': df['employee_id'].nunique(),
                 'total_hr_ids': len(unique_hr_ids),
                 'total_departments': len(unique_departments),
                 'avg_retention_risk': overall_avg_retention_risk,
                 'avg_mobility_score': overall_avg_mobility,
                 'avg_genius_factor': overall_avg_genius,
-                
-                # Key metrics
-                'assessment_completion_by_department': assessment_completion_by_dept,
                 'retention_risk_distribution': retention_risk_distribution,
                 'genius_factor_distribution': genius_factor_distribution,
                 'mobility_trends': {
                     'monthly': mobility_trends,
-                    'quarterly': quarterly_trend
+                    'by_hr': hr_mobility_trends,
+                    'by_department': department_mobility_trends
                 }
             },
-            
             'hrMetrics': hr_stats,
-            'departmentMetrics': department_stats,
-            
             'chartData': {
-                # Completion rates
-                'completion_by_department': assessment_completion_by_dept,
-                
-                # Mobility trends
-                'mobility_monthly_trend': mobility_trends,
-                'mobility_quarterly_trend': quarterly_trend,
-                
-                # Risk distribution
-                'risk_distribution': retention_risk_distribution,
-                'risk_by_hr': {hr_id: metrics['avg_retention_risk'] for hr_id, metrics in hr_stats.items()},
-                'risk_by_department': {dept: metrics['avg_retention_risk'] for dept, metrics in department_stats.items()},
-                
-                # Genius factor distribution
-                'genius_factor_distribution': genius_factor_distribution,
-                'genius_by_hr': {hr_id: metrics['avg_genius_factor'] for hr_id, metrics in hr_stats.items()},
-                'genius_by_department': {dept: metrics['avg_genius_factor'] for dept, metrics in department_stats.items()},
-                
-                # Growth data
-                'hr_growth_trends': growth_trends
-            }
+                'risk_analysis_by_hr': risk_analysis_by_hr,
+                'hr_department_chart_data': hr_dept_chart_data
+            },
+            'employeeRiskDetails': employee_risk_details
         }
 
-        # Emit the comprehensive admin dashboard data
+        # Emit the admin dashboard data
         await sio.emit('reports_info', response_data, to=sid)
 
-        print(f"✅ Admin dashboard data sent: {total_reports} reports, {len(unique_hr_ids)} HR IDs, {len(unique_departments)} departments")
+        print(f"✅ Admin dashboard data sent: {total_reports} reports, {df['employee_id'].nunique()} employees, {len(unique_hr_ids)} HR IDs, {len(unique_departments)} departments")
 
     except Exception as e:
         error_msg = f"Error in admin_dashboard: {str(e)}"
@@ -629,6 +734,337 @@ async def admin_dashboard(sid, data):
         if 'prisma' in locals() and prisma.is_connected():
             await prisma.disconnect()
 
+@sio.event
+async def admin_internal_mobility_analysis(sid, data):
+    try:
+        admin_id = data.get('adminId')
+        if not admin_id:
+            await sio.emit('mobility_analysis', {'error': 'adminId is required'}, to=sid)
+            return
+
+        prisma = Prisma()
+        await prisma.connect()
+
+        departments = await prisma.department.find_many()
+
+        if not departments:
+            await sio.emit('mobility_analysis', {'error': 'No department data found'}, to=sid)
+            return
+
+        # Use timezone-aware datetime for comparison
+        current_date = datetime.now(timezone.utc)
+        
+        # Calculate 6 months ago (including current month)
+        # We want current month + previous 5 months = 6 months total
+        six_months_ago = current_date.replace(day=1)  # Start of current month
+        for _ in range(5):  # Go back 5 more months to get total of 6
+            if six_months_ago.month == 1:
+                six_months_ago = six_months_ago.replace(year=six_months_ago.year - 1, month=12)
+            else:
+                six_months_ago = six_months_ago.replace(month=six_months_ago.month - 1)
+        
+        # Generate all months in the 6-month period (including current month)
+        all_months = []
+        temp_date = six_months_ago.replace(day=1)
+        for i in range(6):  # Exactly 6 months
+            all_months.append(temp_date.strftime('%Y-%m'))
+            if temp_date.month == 12:
+                temp_date = temp_date.replace(year=temp_date.year + 1, month=1)
+            else:
+                temp_date = temp_date.replace(month=temp_date.month + 1)
+        
+        # Initialize data structures
+        hr_stats = {}
+        monthly_trends = {month: {'incoming': 0, 'outgoing': 0} for month in all_months}
+
+        for dept in departments:
+            hr_id = dept.hrId
+            dept_name = dept.name
+            
+            # Initialize HR stats
+            if hr_id not in hr_stats:
+                hr_stats[hr_id] = {
+                    'incoming': 0,
+                    'outgoing': 0,
+                    'promotions': 0,
+                    'transfers': 0,
+                    'departments': {},
+                    'total_movements': 0,
+                    'monthly_trends': {month: {'incoming': 0, 'outgoing': 0} for month in all_months}
+                }
+            
+            # Initialize department within HR stats
+            if dept_name not in hr_stats[hr_id]['departments']:
+                hr_stats[hr_id]['departments'][dept_name] = {
+                    'incoming': 0,
+                    'outgoing': 0,
+                    'promotions': 0,
+                    'transfers': 0
+                }
+
+            # Count promotions from promotion field
+            if dept.promotion and dept.promotion.lower() == 'true':
+                movement_date = dept.updatedAt or dept.createdAt or current_date
+                movement_month = movement_date.strftime('%Y-%m')
+                
+                if movement_month in all_months:  # Only count if within our 6-month range
+                    hr_stats[hr_id]['promotions'] += 1
+                    hr_stats[hr_id]['departments'][dept_name]['promotions'] += 1
+                    hr_stats[hr_id]['incoming'] += 1
+                    hr_stats[hr_id]['departments'][dept_name]['incoming'] += 1
+                    hr_stats[hr_id]['total_movements'] += 1
+                    
+                    # Add to monthly trends
+                    if movement_month in hr_stats[hr_id]['monthly_trends']:
+                        hr_stats[hr_id]['monthly_trends'][movement_month]['incoming'] += 1
+                    if movement_month in monthly_trends:
+                        monthly_trends[movement_month]['incoming'] += 1
+
+            # Count transfers from transfer field
+            if dept.transfer and dept.transfer.lower() == 'outgoing':
+                movement_date = dept.updatedAt or dept.createdAt or current_date
+                movement_month = movement_date.strftime('%Y-%m')
+                
+                if movement_month in all_months:  # Only count if within our 6-month range
+                    hr_stats[hr_id]['transfers'] += 1
+                    hr_stats[hr_id]['departments'][dept_name]['transfers'] += 1
+                    hr_stats[hr_id]['outgoing'] += 1
+                    hr_stats[hr_id]['departments'][dept_name]['outgoing'] += 1
+                    hr_stats[hr_id]['total_movements'] += 1
+                    
+                    # Add to monthly trends
+                    if movement_month in hr_stats[hr_id]['monthly_trends']:
+                        hr_stats[hr_id]['monthly_trends'][movement_month]['outgoing'] += 1
+                    if movement_month in monthly_trends:
+                        monthly_trends[movement_month]['outgoing'] += 1
+
+            # Count ingoing movements from ingoing array
+            if dept.ingoing and isinstance(dept.ingoing, list):
+                for movement in dept.ingoing:
+                    if isinstance(movement, dict):
+                        movement_date = parse_date(movement.get('timestamp')) or dept.updatedAt or dept.createdAt or current_date
+                        movement_month = movement_date.strftime('%Y-%m')
+                        
+                        if movement_month in all_months:  # Only count if within our 6-month range
+                            hr_stats[hr_id]['incoming'] += 1
+                            hr_stats[hr_id]['departments'][dept_name]['incoming'] += 1
+                            hr_stats[hr_id]['total_movements'] += 1
+                            
+                            # Add to monthly trends
+                            if movement_month in hr_stats[hr_id]['monthly_trends']:
+                                hr_stats[hr_id]['monthly_trends'][movement_month]['incoming'] += 1
+                            if movement_month in monthly_trends:
+                                monthly_trends[movement_month]['incoming'] += 1
+                            
+                            # Check if this is a transfer
+                            if movement.get('userId') and movement.get('userId') != dept.userId:
+                                hr_stats[hr_id]['transfers'] += 1
+                                hr_stats[hr_id]['departments'][dept_name]['transfers'] += 1
+
+            # Count outgoing movements from outgoing array
+            if dept.outgoing and isinstance(dept.outgoing, list):
+                for movement in dept.outgoing:
+                    if isinstance(movement, dict):
+                        movement_date = parse_date(movement.get('timestamp')) or dept.updatedAt or dept.createdAt or current_date
+                        movement_month = movement_date.strftime('%Y-%m')
+                        
+                        if movement_month in all_months:  # Only count if within our 6-month range
+                            hr_stats[hr_id]['outgoing'] += 1
+                            hr_stats[hr_id]['departments'][dept_name]['outgoing'] += 1
+                            hr_stats[hr_id]['total_movements'] += 1
+                            
+                            # Add to monthly trends
+                            if movement_month in hr_stats[hr_id]['monthly_trends']:
+                                hr_stats[hr_id]['monthly_trends'][movement_month]['outgoing'] += 1
+                            if movement_month in monthly_trends:
+                                monthly_trends[movement_month]['outgoing'] += 1
+                            
+                            # This is always a transfer
+                            hr_stats[hr_id]['transfers'] += 1
+                            hr_stats[hr_id]['departments'][dept_name]['transfers'] += 1
+
+        # Convert monthly trends to sorted list format
+        monthly_trends_list = []
+        for month in all_months:
+            monthly_trends_list.append({
+                'month': month,
+                'incoming': monthly_trends[month]['incoming'],
+                'outgoing': monthly_trends[month]['outgoing'],
+                'total': monthly_trends[month]['incoming'] + monthly_trends[month]['outgoing']
+            })
+
+        # Convert HR monthly trends to sorted list format
+        for hr_id in hr_stats:
+            hr_monthly_list = []
+            for month in all_months:
+                hr_monthly_list.append({
+                    'month': month,
+                    'incoming': hr_stats[hr_id]['monthly_trends'][month]['incoming'],
+                    'outgoing': hr_stats[hr_id]['monthly_trends'][month]['outgoing'],
+                    'total': hr_stats[hr_id]['monthly_trends'][month]['incoming'] + hr_stats[hr_id]['monthly_trends'][month]['outgoing']
+                })
+            hr_stats[hr_id]['monthly_trends'] = hr_monthly_list
+
+        # Prepare response
+        response_data = {
+            'hr_stats': hr_stats,
+            'overall_monthly_trends': monthly_trends_list,
+            'analysis_period': {
+                'start': six_months_ago.strftime('%Y-%m-%d'),
+                'end': current_date.strftime('%Y-%m-%d'),
+                'months': all_months
+            }
+        }
+
+        await sio.emit('mobility_analysis', response_data, to=sid)
+        print(f"✅ Mobility analysis with trends completed for {len(all_months)} months: {all_months}")
+
+    except Exception as e:
+        error_msg = f"Error: {str(e)}"
+        print(error_msg)
+        await sio.emit('mobility_analysis', {'error': error_msg}, to=sid)
+
+    finally:
+        if 'prisma' in locals() and prisma.is_connected():
+            await prisma.disconnect()
+
+def parse_date(date_str):
+    """Simple date parser that ensures timezone awareness"""
+    if not date_str:
+        return None
+    try:
+        parsed_date = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+        if parsed_date.tzinfo is None:
+            parsed_date = parsed_date.replace(tzinfo=timezone.utc)
+        return parsed_date
+    except Exception as e:
+        print(f"Date parsing error: {e}")
+        return None
+def generate_month_range(start_date, end_date):
+    """Generate list of months between two dates in YYYY-MM format"""
+    months = []
+    current = start_date
+    while current <= end_date:
+        months.append(current.strftime('%Y-%m'))
+        # Move to next month
+        if current.month == 12:
+            current = current.replace(year=current.year + 1, month=1)
+        else:
+            current = current.replace(month=current.month + 1)
+    return months
+
+@sio.event
+async def department_analysis(sid, data):
+    """Endpoint to fetch department-level analysis for a specific HR"""
+    try:
+        hr_id = data.get('hrId')
+        if not hr_id:
+            await sio.emit('department_info', {'error': 'hrId is required'}, to=sid)
+            return
+
+        prisma = Prisma()
+        await prisma.connect()
+
+        # Get all departments for this HR
+        departments = await prisma.department.find_many(where={'hrId': hr_id})
+
+        if not departments:
+            await sio.emit('department_info', {'error': 'No departments found for this HR'}, to=sid)
+            return
+
+        # Get all users for this HR to count employees per department and get employee details
+        users = await prisma.user.find_many(
+            where={'hrId': hr_id},
+            include={
+                'employee': True  # Include employee details
+            }
+        )
+        
+        # Count employees in each department and collect employee details
+        department_employee_count = {}
+        department_employees = {}  # Store employee details by department
+        
+        for user in users:
+            if user.department and isinstance(user.department, list) and len(user.department) > 0:
+                current_department = user.department[-1]  # Get the last department (current department)
+                department_employee_count[current_department] = department_employee_count.get(current_department, 0) + 1
+                
+                # Add employee details to department
+                if current_department not in department_employees:
+                    department_employees[current_department] = []
+                
+                # Create employee detail object
+                employee_detail = {
+                    'id': user.id,
+                    'firstName': user.firstName,
+                    'lastName': user.lastName,
+                    'email': user.email,
+                    'position': user.position[-1] if user.position and isinstance(user.position, list) and len(user.position) > 0 else 'N/A',
+                    'salary': user.salary,
+                    'employeeId': user.employee.id if user.employee else 'N/A'
+                }
+                
+                # Add skills if available
+                if user.employee and user.employee.skills:
+                    employee_detail['skills'] = user.employee.skills
+                
+                # Add education if available
+                if user.employee and user.employee.education:
+                    employee_detail['education'] = user.employee.education
+                
+                # Add experience if available
+                if user.employee and user.employee.experience:
+                    employee_detail['experience'] = user.employee.experience
+                
+                department_employees[current_department].append(employee_detail)
+
+        # Process department data
+        department_data = []
+        for dept in departments:
+            ingoing_count = len(dept.ingoing) if dept.ingoing and isinstance(dept.ingoing, list) else 0
+            outgoing_count = len(dept.outgoing) if dept.outgoing and isinstance(dept.outgoing, list) else 0
+            
+            # Get employee count for this department
+            employee_count = department_employee_count.get(dept.name, 0)
+            
+            # Get employee details for this department
+            employees = department_employees.get(dept.name, [])
+
+            department_data.append({
+                'department': dept.name,
+                'createdAt': dept.createdAt.strftime('%Y-%m-%d') if dept.createdAt else 'N/A',
+                'ingoing': ingoing_count,
+                'outgoing': outgoing_count,
+                'employeeCount': employee_count,
+                'employees': employees  # Add employee details
+            })
+
+        # Calculate card data (totals across all departments)
+        total_employees = sum(dept['employeeCount'] for dept in department_data)
+        total_ingoing = sum(dept['ingoing'] for dept in department_data)
+        total_outgoing = sum(dept['outgoing'] for dept in department_data)
+        total_departments = len(department_data)
+
+        card_data = {
+            'totalEmployees': total_employees,
+            'totalIngoing': total_ingoing,
+            'totalOutgoing': total_outgoing,
+            'totalDepartments': total_departments
+        }
+
+        await sio.emit('department_info', {
+            'departments': department_data,
+            'cardData': card_data
+        }, to=sid)
+
+    except Exception as e:
+        error_msg = f"Error in department_analysis: {str(e)}"
+        print(error_msg)
+        await sio.emit('department_info', {'error': error_msg}, to=sid)
+
+    finally:
+        if 'prisma' in locals() and prisma.is_connected():
+            await prisma.disconnect()
 @sio.event
 async def get_rooms(sid):
     """Debug endpoint to see all rooms"""

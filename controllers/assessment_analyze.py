@@ -49,7 +49,7 @@ class AssessmentController:
 
             # 1. Get basic assessment results
             basic_results = analyze_assessment_data(input_data.data)
-            print(basic_results,'basic result')
+            # print(basic_results,'basic result')
             # Send progress update
             # await NotificationService.send_user_notification(
             #     input_data.userId,
