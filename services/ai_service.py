@@ -380,7 +380,7 @@ class AIService:
                     "url": "https://example.com/industry-trends"
                 }]
                 state['search_results'] = search_results
-            return {"search_results": search_results}
+            return state
         
         # Node to analyze search results and compute comprehensive analysis
         async def analyze_node(state: State) -> State:
