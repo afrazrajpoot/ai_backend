@@ -320,7 +320,8 @@ class AIService:
         except Exception as e:
             logger.error(f"Error in generate_career_recommendation: {str(e)}")
             return {"status": "error", "error": str(e)}
-
+    
+    
     @classmethod
     async def _perform_risk_analysis(cls, report: Dict[str, Any]) -> Dict[str, Any]:
         # Define state for LangGraph
@@ -340,7 +341,11 @@ class AIService:
             genius_factors.append(report["primary_genius_factor"])
         if "secondary_genius_factor" in report:
             genius_factors.append(report["secondary_genius_factor"])
-        
+        # Default genius factors if none provided
+        if not genius_factors:
+            genius_factors = ["General Talent"]
+            logger.warning("No genius factors in report, using default: General Talent")
+
         # Get company from report or use default
         company = report.get("company", "Fortune 1000 Company")
 
@@ -349,40 +354,33 @@ class AIService:
             search_results = []
             try:
                 tavily = TavilySearchResults(api_key=settings.TAVILY_API_KEY, max_results=5)
-                
-                # Multiple queries for comprehensive analysis
                 queries = [
                     f"employee retention statistics trends {company} 2024",
                     f"internal mobility programs best practices {company}",
                     f"employee turnover prevention strategies {company}",
-                    f"career development trends {company} {genius_factors}",
+                    f"career development trends {company} {' '.join(genius_factors)}",
                     f"talent retention innovative approaches {company}"
                 ]
-                
                 for query in queries:
                     try:
                         results = tavily.invoke({"query": query})
                         if results and isinstance(results, list):
                             search_results.extend(results)
-                        await asyncio.sleep(0.1)  # Small delay between queries
+                        await asyncio.sleep(0.1)
                     except Exception as e:
                         logger.warning(f"Query failed for '{query}': {e}")
                         continue
-                
                 logger.info(f"Found {len(search_results)} search results")
-                
             except Exception as e:
                 logger.error(f"Search error: {e}")
-                # Add fallback data
+                # Report-specific fallback data
                 search_results = [{
-                    "title": "Industry Retention Trends",
-                    "content": "Current trends show increased focus on internal mobility, with companies investing in upskilling and career pathing to reduce turnover.",
+                    "title": f"Retention Trends for {company}",
+                    "content": f"Generic trends for {company} show focus on internal mobility and upskilling to retain talent with skills like {', '.join(genius_factors)}.",
                     "url": "https://example.com/industry-trends"
                 }]
-                state['search_results'] = search_results
             return {"search_results": search_results}
 
-        
         # Node to analyze search results and compute comprehensive analysis
         async def analyze_node(state: State) -> State:
             llm = ChatOpenAI(
@@ -392,23 +390,23 @@ class AIService:
                 max_tokens=3000
             )
 
-            # Enhanced prompt template
+            # Enhanced prompt with emphasis on report-specific details
             analysis_prompt = PromptTemplate(
                 template=(
                     "You are an HR risk analyst specializing in employee retention and mobility. "
-                    "Based on the employee report: {report}\n\n"
+                    "Analyze the following employee report: {report}\n\n"
                     "And the following web search results on internal mobility and retention trends: {search_results}\n\n"
-                    "Provide a comprehensive analysis including:\n\n"
-                    "1. SCORES (0-100 scale):\n"
-                    "   - Genius Factor Alignment Score (higher = better cultural/role fit)\n"
-                    "   - Retention Risk Score (higher = higher risk of leaving)\n"
-                    "   - Mobility Opportunity Score (higher = better internal mobility prospects)\n\n"
-                    "2. TRENDS ANALYSIS:\n"
-                    "   - Current retention trends in the industry/company\n"
+                    "Provide a comprehensive analysis tailored to the employee's specific profile, including:\n\n"
+                    "1. SCORES (0-100 scale, vary based on report details):\n"
+                    "   - Genius Factor Alignment Score: Reflects cultural/role fit based on {genius_factors}\n"
+                    "   - Retention Risk Score: Higher means higher risk of leaving, based on employee profile\n"
+                    "   - Mobility Opportunity Score: Higher means better internal mobility prospects\n\n"
+                    "2. TRENDS ANALYSIS (specific to employee and company):\n"
+                    "   - Retention trends in the industry/{company}\n"
                     "   - Internal mobility patterns and innovations\n"
-                    "   - Risk factors specific to this employee profile\n\n"
-                    "3. RECOMMENDATIONS (3-5 actionable items):\n"
-                    "   - Specific retention strategies\n"
+                    "   - Risk factors specific to this employee's profile\n\n"
+                    "3. RECOMMENDATIONS (3-5 actionable, employee-specific items):\n"
+                    "   - Retention strategies tailored to employee\n"
                     "   - Mobility enhancement opportunities\n"
                     "   - Risk mitigation actions\n\n"
                     "Output as JSON: {{\n"
@@ -422,38 +420,32 @@ class AIService:
                     "    \"mobility_trends\": str,\n"
                     "    \"risk_factors\": str\n"
                     "  }},\n"
-                    "  \"recommendations\": [\n"
-                    "    \"recommendation1\",\n"
-                    "    \"recommendation2\",\n"
-                    "    \"recommendation3\"\n"
-                    "  ],\n"
-                    "  \"reasoning\": \"brief overall reasoning\"\n"
+                    "  \"recommendations\": [str],\n"
+                    "  \"reasoning\": str\n"
                     "}}"
                 ),
-                input_variables=["report", "search_results"]
+                input_variables=["report", "search_results", "genius_factors"]
             )
 
             try:
                 # Format the prompt with actual data
                 formatted_prompt = await analysis_prompt.ainvoke({
                     "report": json.dumps(state["report"], indent=2),
-                    "search_results": json.dumps(state["search_results"], indent=2)
+                    "search_results": json.dumps(state["search_results"], indent=2),
+                    "genius_factors": ', '.join(state["genius_factors"]),
+                    "company": "fortune 1000 company"
                 })
                 
-                # Get response from LLM
-                response = await llm.ainvoke(formatted_prompt)
+                # Debug: Log the exact prompt sent to the LLM
+                logger.debug(f"LLM Prompt: {formatted_prompt.text}")
+                
+                # Get response from LLM with structured output
+                response = await llm.ainvoke(formatted_prompt, response_format={"type": "json_object"})
                 
                 content = response.content.strip()
                 
-                # Debug: Print the raw response
+                # Debug: Log the raw LLM response
                 logger.debug(f"LLM Response: {content}")
-                
-                # Try to extract JSON from the response
-                if not content.startswith("{"):
-                    import re
-                    json_match = re.search(r'\{.*\}', content, re.DOTALL)
-                    if json_match:
-                        content = json_match.group(0)
                 
                 # Parse the JSON response
                 analysis_data = json.loads(content)
@@ -471,8 +463,8 @@ class AIService:
                 })
                 
                 recommendations = analysis_data.get("recommendations", [
-                    "Implement regular career development conversations",
-                    "Create clear internal mobility pathways",
+                    f"Implement career development for {', '.join(state['genius_factors'])}",
+                    f"Create mobility pathways for {company}",
                     "Enhance mentorship programs"
                 ])
                 
@@ -489,7 +481,7 @@ class AIService:
                     "mobility_trends": "Error in mobility analysis",
                     "risk_factors": "Analysis error occurred"
                 }
-                recommendations = ["Conduct manual analysis due to system error"]
+                recommendations = [f"Conduct manual analysis for {company} due to system error"]
             except Exception as e:
                 logger.error(f"Error in analyze_node: {e}")
                 scores = {
@@ -502,13 +494,9 @@ class AIService:
                     "mobility_trends": f"Analysis error: {str(e)}",
                     "risk_factors": f"Analysis error: {str(e)}"
                 }
-                recommendations = ["Please review manually due to analysis error"]
+                recommendations = [f"Review manually for {company} due to analysis error"]
 
             analysis_summary = "Comprehensive risk analysis completed with trends and recommendations."
-            state["analysis"] = analysis_summary
-            state["scores"] = scores
-            state["trends"] = trends
-            state["recommendations"] = recommendations
             return {
                 "analysis": analysis_summary,
                 "scores": scores,
