@@ -379,7 +379,7 @@ class AIService:
                     "content": "Current trends show increased focus on internal mobility, with companies investing in upskilling and career pathing to reduce turnover.",
                     "url": "https://example.com/industry-trends"
                 }]
-
+                state['search_results'] = search_results
             return {"search_results": search_results}
         
         # Node to analyze search results and compute comprehensive analysis
