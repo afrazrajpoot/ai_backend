@@ -505,7 +505,10 @@ class AIService:
                 recommendations = ["Please review manually due to analysis error"]
 
             analysis_summary = "Comprehensive risk analysis completed with trends and recommendations."
-
+            state["analysis"] = analysis_summary
+            state["scores"] = scores
+            state["trends"] = trends
+            state["recommendations"] = recommendations
             return {
                 "analysis": analysis_summary,
                 "scores": scores,
