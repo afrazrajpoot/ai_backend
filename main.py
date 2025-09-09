@@ -9,6 +9,8 @@ from utils.logger import logger
 
 from controllers.job_controller import router as job_router
 from controllers.employee_parse_controller import router as employee_router
+from routes.hr_routes.intervation_routes import router as analysis_router
+from routes.hr_routes.chat_route import router as chat_router
 # Import the Socket.IO instance from socket_manager
 from utils.socket_manager import sio
 import socketio
@@ -37,6 +39,10 @@ app.include_router(assessment_analyze_router)
 
 app.include_router(job_router)
 app.include_router(employee_router)
+
+app.include_router(analysis_router)
+app.include_router(chat_router)
+app.include_router(recommendation_course_router := __import__('routes.employee_route.recommendation_course', fromlist=['router']).router)
 # Create ASGI app with both FastAPI and Socket.IO
 socket_app = socketio.ASGIApp(sio, app)
 

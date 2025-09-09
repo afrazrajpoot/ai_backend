@@ -104,7 +104,7 @@ model Employee {
  
   bio           String?
   avatar        String?
-  skills        String[]
+  skills        Json?
   education     Json?
   experience    Json?
   resume        String?

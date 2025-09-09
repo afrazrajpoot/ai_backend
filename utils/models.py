@@ -1,5 +1,5 @@
 
-from typing import List, Dict
+from typing import List, Dict, Optional,Any
 
 from pydantic import BaseModel, Field
 
@@ -66,3 +66,81 @@ class IndividualEmployeeReport(BaseModel):
 
 class EmployeeRequest(BaseModel):
     employeeId: str
+
+
+
+
+class DepartmentMetrics(BaseModel):
+    avg_scores: Dict[str, float]
+    employee_count: int
+    engagement_distribution: Dict[str, int]
+    first_report_date: str
+    genius_factor_distribution: Dict[str, int]
+    last_report_date: str
+    mobility_trend: Dict[str, int]
+    productivity_distribution: Dict[str, int]
+    retention_risk_distribution: Dict[str, int]
+    skills_alignment_distribution: Dict[str, int]
+
+class DepartmentInput(BaseModel):
+    color: str
+    completion: int
+    employee_count: int
+    metrics: DepartmentMetrics
+    name: str
+
+class AnalysisRequest(BaseModel):
+    departments: List[DepartmentInput]
+
+class RecommendationCard(BaseModel):
+    department: str
+    risk_level: str
+    retention_score: float
+    mobility_opportunities: List[str]
+    recommendations: List[str]
+    action_items: List[str]
+
+class AnalysisResponse(BaseModel):
+    overall_risk_score: float
+    department_recommendations: List[RecommendationCard]
+    summary: str
+
+
+class ChatMessage(BaseModel):
+    hr_id: str
+    department: str
+    message: str
+    dashboard_data: Optional[List[Dict[str, Any]]] = None
+
+class ChatResponse(BaseModel):
+    response: str
+    conversation_id: str
+
+
+
+
+class UserIdRequest(BaseModel):
+    user_id: str
+
+class Skill(BaseModel):
+    name: str
+    proficiency: int
+
+class RecommendedCourse(BaseModel):
+    title: str
+    provider: str
+    url: str
+    reason: str
+
+class ProgressTracking(BaseModel):
+    current_position: str
+    previous_position: Optional[str]
+    current_department: str
+    previous_department: Optional[str]
+
+class EmployeeLearningResponse(BaseModel):
+    employee_id: str
+    employee_name: str
+    current_skills: List[Skill]  # Changed to List[Skill]
+    recommended_courses: List[RecommendedCourse]
+    progress_tracking: ProgressTracking
