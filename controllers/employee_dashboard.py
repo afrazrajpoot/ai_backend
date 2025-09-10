@@ -7,7 +7,7 @@ from typing import Any
 from services.employee_services.ai_services import JobRecommendationService
 from pydantic import BaseModel
 from utils.models import EmployeeRequest
-from services.employee_services.employee_dashboard import get_dashboard_service
+from services.employee_services.employee_dashboard import get_dashboard_service,generate_ai_recommendation
 class RecommendationRequest(BaseModel):
     recruiter_id: str
     employee_id: str
@@ -136,6 +136,14 @@ class DashboardController:
     @staticmethod
     async def get_dashboard_controller(data: EmployeeRequest):
         dashboard_data, error = await get_dashboard_service(data.employeeId)
+
+        if error:
+            raise HTTPException(status_code=404, detail=error)
+
+        return dashboard_data
+    @staticmethod
+    async def generate_employee_career_recommendation(data: EmployeeRequest):
+        dashboard_data, error = await generate_ai_recommendation(data.employeeId)
 
         if error:
             raise HTTPException(status_code=404, detail=error)

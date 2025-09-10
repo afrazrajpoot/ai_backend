@@ -983,6 +983,15 @@ async def department_analysis(sid, data):
         # Count employees in each department and collect employee details
         department_employee_count = {}
         department_employees = {}  # Store employee details by department
+        department_info_map = {}   # Store department info by name
+        
+        # Create a mapping of department names to their info
+        for dept in departments:
+            department_info_map[dept.name] = {
+                'createdAt': dept.createdAt.strftime('%Y-%m-%d') if dept.createdAt else 'N/A',
+                'ingoing': len(dept.ingoing) if dept.ingoing and isinstance(dept.ingoing, list) else 0,
+                'outgoing': len(dept.outgoing) if dept.outgoing and isinstance(dept.outgoing, list) else 0
+            }
         
         for user in users:
             if user.department and isinstance(user.department, list) and len(user.department) > 0:
@@ -1018,23 +1027,27 @@ async def department_analysis(sid, data):
                 
                 department_employees[current_department].append(employee_detail)
 
-        # Process department data
+        # Process department data - only unique department names
         department_data = []
-        for dept in departments:
-            ingoing_count = len(dept.ingoing) if dept.ingoing and isinstance(dept.ingoing, list) else 0
-            outgoing_count = len(dept.outgoing) if dept.outgoing and isinstance(dept.outgoing, list) else 0
+        processed_departments = set()  # Track processed departments to avoid duplicates
+        
+        for dept_name, dept_info in department_info_map.items():
+            if dept_name in processed_departments:
+                continue
+                
+            processed_departments.add(dept_name)
             
             # Get employee count for this department
-            employee_count = department_employee_count.get(dept.name, 0)
+            employee_count = department_employee_count.get(dept_name, 0)
             
             # Get employee details for this department
-            employees = department_employees.get(dept.name, [])
+            employees = department_employees.get(dept_name, [])
 
             department_data.append({
-                'department': dept.name,
-                'createdAt': dept.createdAt.strftime('%Y-%m-%d') if dept.createdAt else 'N/A',
-                'ingoing': ingoing_count,
-                'outgoing': outgoing_count,
+                'department': dept_name,
+                'createdAt': dept_info['createdAt'],
+                'ingoing': dept_info['ingoing'],
+                'outgoing': dept_info['outgoing'],
                 'employeeCount': employee_count,
                 'employees': employees  # Add employee details
             })
@@ -1065,6 +1078,7 @@ async def department_analysis(sid, data):
     finally:
         if 'prisma' in locals() and prisma.is_connected():
             await prisma.disconnect()
+
 @sio.event
 async def get_rooms(sid):
     """Debug endpoint to see all rooms"""

@@ -144,3 +144,28 @@ class EmployeeLearningResponse(BaseModel):
     current_skills: List[Skill]  # Changed to List[Skill]
     recommended_courses: List[RecommendedCourse]
     progress_tracking: ProgressTracking
+
+# app/schemas/department_schemas.py
+
+class EmployeeInfo(BaseModel):
+    id: str
+    firstName: Optional[str] = None
+    lastName: Optional[str] = None
+    email: Optional[str] = None
+    position: Optional[str] = None
+    employeeId: Optional[str] = None
+
+class DepartmentAggregation(BaseModel):
+    department: str
+    employee_count: int
+    employees: List[EmployeeInfo]
+
+class DepartmentStatistics(BaseModel):
+    total_departments: int
+    total_employees: int
+    departments: List[DepartmentAggregation]
+
+class DepartmentResponse(BaseModel):
+    success: bool
+    data: DepartmentStatistics | DepartmentAggregation | List[DepartmentAggregation]
+    message: str

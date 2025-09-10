@@ -26,3 +26,11 @@ async def recommend_companies(request: EmployeeRequest):
         return await DashboardController.get_dashboard_controller(request)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+    
+@router.post("/generate-employee-career-recommendation")
+async def recommend_companies(request: EmployeeRequest):
+    print(request,'employee request')
+    try:
+        return await DashboardController.generate_employee_career_recommendation(request)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
