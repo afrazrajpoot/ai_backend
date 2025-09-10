@@ -96,7 +96,7 @@ async def hr_dashboard(sid, data):
             if report.risk_analysis and isinstance(report.risk_analysis, dict):
                 risk_scores = report.risk_analysis.get('scores', {})
                 retention_risk_score = risk_scores.get('retention_risk_score', 50)
-                genius_factor_score = report.risk_analysis.get('genius_factor_score', 50)
+                genius_factor_score = risk_scores.get('genius_factor_score', 50)
                 mobility_opportunity_score = risk_scores.get('mobility_opportunity_score', 50)
             
             # Extract month from createdAt for mobility trend analysis
@@ -288,9 +288,28 @@ async def internal_mobility(sid, data):
         # Get all departments for this HR
         departments = await prisma.department.find_many(
             where={'hrId': hr_id},
-          
         )
-
+        
+        # Get users and convert to serializable format
+        user_objects = await prisma.user.find_many(
+            where={'hrId': hr_id},
+        )
+        
+        # Convert users to serializable dictionaries
+        users = []
+        for user in user_objects:
+            users.append({
+                'id': user.id,
+                'hrId': user.hrId,
+                'name': user.firstName + ' ' + user.lastName,
+                'email': user.email,
+                'position': user.position,
+                'department': user.department,
+                'salary': float(user.salary) if user.salary else None,
+                # 'hireDate': user.hireDate.isoformat() if user.hireDate else None,
+                # Add any other fields you need
+            })
+        
         if not departments:
             await sio.emit('mobility_info', {'error': 'No departments found for this HR'}, to=sid)
             return
@@ -390,13 +409,13 @@ async def internal_mobility(sid, data):
             }
 
         # Calculate Metrics
+        total_ingoing = len(df[df['type'] == 'ingoing'])
+        total_outgoing = len(df[df['type'] == 'outgoing'])
         total_promotions = len(df[(df['promotion'].notnull()) & (df['promotion'] != 'false')])
-        total_transfers = len(df[df['transfer'] == 'outgoing'])
+        total_transfers = total_outgoing  # Transfer count equals outgoing count
         total_movements = len(df)
         
         # Retention rate: (ingoing - outgoing) / ingoing * 100
-        total_ingoing = len(df[df['type'] == 'ingoing'])
-        total_outgoing = len(df[df['type'] == 'outgoing'])
         retention_rate = (
             round((total_ingoing - total_outgoing) / total_ingoing * 100, 1)
             if total_ingoing > 0 else 100.0
@@ -415,12 +434,13 @@ async def internal_mobility(sid, data):
             'data_timeframe': {
                 'start_date': six_months_ago.strftime('%Y-%m-%d'),
                 'end_date': current_date.strftime('%Y-%m-%d')
-            }
+            },
+            "users": users  # Now properly serialized
         }
 
         # Emit the mobility data
         await sio.emit('mobility_info', response_data, to=sid)
-        print(f"✅ Mobility data sent for HR {hr_id}: {total_movements} total movements")
+        print(f"✅ Mobility data sent for HR {hr_id}: {total_movements} total movements, {len(users)} users")
 
     except Exception as e:
         error_msg = f"Error in internal_mobility: {str(e)}"
@@ -430,8 +450,6 @@ async def internal_mobility(sid, data):
     finally:
         if 'prisma' in locals() and prisma.is_connected():
             await prisma.disconnect()
-
-
 @sio.event
 async def admin_dashboard(sid, data):
     """Endpoint to fetch admin-level dashboard data for HR-specific metrics"""
