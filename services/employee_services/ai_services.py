@@ -67,8 +67,14 @@ class JobVectorStore:
         if self._loaded and self.vs:
             return  # Already built
 
-        # Try loading persisted index
-        if os.path.exists(INDEX_DIR):
+        # Ensure directory exists
+        os.makedirs(INDEX_DIR, exist_ok=True)
+
+        # Try loading persisted index - check if index files actually exist
+        index_file = os.path.join(INDEX_DIR, "index.faiss")
+        pkl_file = os.path.join(INDEX_DIR, "index.pkl")
+        
+        if os.path.exists(index_file) and os.path.exists(pkl_file):
             try:
                 self.vs = FAISS.load_local(INDEX_DIR, self.embeddings, allow_dangerous_deserialization=True)
                 logger.info("Loaded FAISS index from disk")
@@ -76,8 +82,18 @@ class JobVectorStore:
                 return
             except Exception as e:
                 logger.warning(f"Failed to load FAISS index: {e}")
+                # Clean up corrupted files
+                try:
+                    if os.path.exists(index_file):
+                        os.remove(index_file)
+                    if os.path.exists(pkl_file):
+                        os.remove(pkl_file)
+                    logger.info("Removed corrupted FAISS index files")
+                except Exception as cleanup_error:
+                    logger.warning(f"Failed to cleanup corrupted files: {cleanup_error}")
 
         # Build from DB
+        logger.info("Building FAISS index from database...")
         jobs = await db.job.find_many()
         docs: List[Document] = [self._job_to_document(JobRow(
             id=j.id,
@@ -90,14 +106,21 @@ class JobVectorStore:
 
         if not docs:
             self.vs = FAISS.from_texts(["NO_JOBS"], self.embeddings, metadatas=[{"placeholder": True}])
+            logger.info("Created placeholder FAISS index (no jobs found)")
         else:
             self.vs = FAISS.from_documents(docs, self.embeddings)
+            logger.info(f"Created FAISS index with {len(docs)} documents")
 
-        os.makedirs(INDEX_DIR, exist_ok=True)
-        self.vs.save_local(INDEX_DIR)
+        # Save the index
+        try:
+            self.vs.save_local(INDEX_DIR)
+            logger.info("FAISS index built and saved to disk")
+        except Exception as e:
+            logger.error(f"Failed to save FAISS index: {e}")
+            # Continue anyway since we have the index in memory
+        
         self._loaded = True
-        logger.info("FAISS index built and saved")
-
+    
     def retrieve_jobs(self, query_text: str, recruiter_id: str, k: int = TOP_K) -> List[Document]:
         if not self.vs:
             return []
