@@ -77,3 +77,7 @@ coverage.xml
 # Mac / Linux / Windows
 .DS_Store
 Thumbs.db
+
+
+faiss_jobs_index/*.faiss
+faiss_jobs_index/*.pkl
