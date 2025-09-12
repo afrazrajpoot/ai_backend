@@ -8,6 +8,9 @@ import json
 sio = socketio.AsyncServer(
     async_mode='asgi',
     cors_allowed_origins=[
+        "https://geniusfactor.ai",
+        "https://www.geniusfactor.ai",
+        "http://api.geniusfactor.ai",
         "http://localhost:3000",
         "http://127.0.0.1:3000",
         "http://localhost:8000", 
