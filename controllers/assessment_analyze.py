@@ -86,9 +86,9 @@ class AssessmentController:
                 "AI Track": "Data Scientist → Machine Learning Engineer → AI Research Director → Chief AI Officer"
             },
             "transition_timeline": {
-                "6_month": "Transition into a Senior Developer role with increased responsibilities.",
-                "1_year": "Move into a Technical Lead position, overseeing project teams.",
-                "2_year": "Advance to Chief Technology Officer, shaping the organization's technology strategy."
+                "six_month": "Transition into a Senior Developer role with increased responsibilities.",
+                "one_year": "Move into a Technical Lead position, overseeing project teams.",
+                "two_year": "Advance to Chief Technology Officer, shaping the organization's technology strategy."
             },
             "required_skill_development": [
                 "Advanced programming languages (Python, JavaScript, Java, C++)",
