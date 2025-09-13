@@ -56,7 +56,7 @@ def test_key_sanitization():
     # Test data that mimics the problematic JSON from the error
     test_data = {
         "internal_career_opportunities": {
-            "transition_timeline": {  # Should become progress_transition_timeline
+            "transition_timeline": {  # Should become
                 "6_months": "Complete training in advanced UX design principles and tools.",  # Should become six_months
                 "1_year": "Take on lead design projects to build portfolio and experience.",  # Should become one_year
                 "2_years": "Pursue leadership roles in design or product management."  # Should become two_years

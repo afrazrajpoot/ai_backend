@@ -1,6 +1,5 @@
 import json
 import os
-import re
 from pathlib import Path
 from typing import List, Dict, Any, TypedDict, Annotated
 import hashlib
@@ -267,7 +266,7 @@ class AIService:
 
             llm = ChatOpenAI(
                 api_key=settings.OPENAI_API_KEY,
-                model="gpt-4o",
+                model="gpt-4o-mini",
                 temperature=0.3,
                 max_tokens=3000
             )
@@ -280,46 +279,12 @@ class AIService:
                 if not system_prompt:
                     raise ValueError("System prompt not found in JSON file")
 
-            # Add key naming reinforcement to the system prompt
-            key_naming_instruction = """
-            
-CRITICAL KEY NAMING REQUIREMENTS FOR GRAPHQL COMPATIBILITY:
-- In the "internal_career_opportunities" object, the timeline field MUST use the exact key name: "progress_transition_timeline"
-- Do NOT use "transition_timeline". Only "progress_transition_timeline" is valid.
-- For timeline keys, use ONLY these exact formats: "six_months", "one_year", "two_years" (NOT "6_months", "1_year", "2_years")
-- For career pathway keys, use underscores instead of spaces: "Development_Track", "Security_Track", "AI_Track"
-- NEVER start any key with a number (e.g., "6_months" is INVALID, use "six_months")
-- Replace all spaces in keys with underscores
-- Remove all special characters from keys except underscores
-
-VALID EXAMPLE:
-"internal_career_opportunities": {
-    "progress_transition_timeline": {
-        "six_months": "Complete training in advanced UX design principles and tools.",
-        "one_year": "Take on lead design projects to build portfolio and experience.",
-        "two_years": "Pursue leadership roles in design or product management."
-    },
-    "career_pathways": {
-        "Development_Track": "Engineer → Senior → Lead → CTO",
-        "Security_Track": "Analyst → Engineer → Architect → CISO"
-    }
-}
-
-INVALID EXAMPLE (DO NOT USE):
-"internal_career_opportunities": {
-    "transition_timeline": {
-        "6_months": "Invalid - starts with number",
-        "1_year": "Invalid - starts with number"
-    }
-}
-            """
-
             # Initialize Pydantic output parser
             parser = PydanticOutputParser(pydantic_object=IndividualEmployeeReport)
 
-            # Enhanced prompt template with key naming instructions
+            # Prompt template with format instructions
             report_prompt = PromptTemplate(
-                template=system_prompt + key_naming_instruction + "\n\nAnalysis Data:\n{analysis_data}\n\n{format_instructions}\nGenerate the report:",
+                template=system_prompt + "\n\nAnalysis Data:\n{analysis_data}\n\n{format_instructions}\nGenerate the report:",
                 input_variables=["analysis_data"],
                 partial_variables={"format_instructions": parser.get_format_instructions()}
             )
@@ -327,187 +292,18 @@ INVALID EXAMPLE (DO NOT USE):
             # Log the analysis data
             logger.debug(f"Analysis data: {analysis_result}")
 
-            # Generate the report
-            chain = report_prompt | llm
-            raw_output = await chain.ainvoke({"analysis_data": analysis_result})
-            
-            # PRE-PROCESSING: Fix the raw text before Pydantic parsing
-            raw_text = raw_output.content if hasattr(raw_output, 'content') else str(raw_output)
-            
-            # Fix the problematic keys in the raw JSON string - COMPREHENSIVE FIXES
-            key_fixes = [
-                # Fix transition_timeline -> progress_transition_timeline
-                (r'"transition_timeline":', '"progress_transition_timeline":'),
-                # Fix numeric timeline keys - COMPREHENSIVE
-                (r'"6_months":', '"six_months":'),
-                (r'"6_month":', '"six_months":'),
-                (r'"1_year":', '"one_year":'),
-                (r'"1_years":', '"one_year":'),
-                (r'"2_years":', '"two_years":'),
-                (r'"2_year":', '"two_years":'),
-                (r'"3_years":', '"three_years":'),
-                (r'"3_year":', '"three_years":'),
-                (r'"4_years":', '"four_years":'),
-                (r'"4_year":', '"four_years":'),
-                (r'"5_years":', '"five_years":'),
-                (r'"5_year":', '"five_years":'),
-                (r'"7_years":', '"seven_years":'),
-                (r'"7_year":', '"seven_years":'),
-                (r'"8_years":', '"eight_years":'),
-                (r'"8_year":', '"eight_years":'),
-                (r'"9_years":', '"nine_years":'),
-                (r'"9_year":', '"nine_years":'),
-                (r'"10_years":', '"ten_years":'),
-                (r'"10_year":', '"ten_years":'),
-                # Fix career pathway keys with spaces
-                (r'"Development Track":', '"Development_Track":'),
-                (r'"Security Track":', '"Security_Track":'),
-                (r'"AI Track":', '"AI_Track":'),
-                (r'"Data Track":', '"Data_Track":'),
-                (r'"Leadership Track":', '"Leadership_Track":'),
-                (r'"Tech Track":', '"Tech_Track":'),
-                (r'"Product Track":', '"Product_Track":'),
-                (r'"Design Track":', '"Design_Track":'),
-                (r'"Marketing Track":', '"Marketing_Track":'),
-                (r'"Engineering Track":', '"Engineering_Track":'),
-                # Fix any remaining problematic characters
-                (r'"short_term":', '"short_term":'),
-                (r'"long_term":', '"long_term":'),
-            ]
-            
-            # Apply all the fixes
-            fixed_text = raw_text
-            fixes_applied = []
-            for old_pattern, new_pattern in key_fixes:
-                if old_pattern in fixed_text:
-                    fixed_text = fixed_text.replace(old_pattern, new_pattern)
-                    fixes_applied.append(f"{old_pattern} -> {new_pattern}")
-            
-            if fixes_applied:
-                logger.info(f"Pre-processing fixes applied: {fixes_applied}")
-            else:
-                logger.debug("No pre-processing fixes needed")
-            
-            # Now parse with Pydantic using the fixed text
-            try:
-                import json
-                # Parse as JSON first to validate
-                json_data = json.loads(fixed_text)
-                # Then create the Pydantic object from the dict
-                output = IndividualEmployeeReport.parse_obj(json_data)
-            except json.JSONDecodeError as je:
-                logger.error(f"JSON parsing failed after pre-processing: {je}")
-                # Fallback to original parsing
-                chain_with_parser = report_prompt | llm | parser
-                output = await chain_with_parser.ainvoke({"analysis_data": analysis_result})
-            except Exception as pe:
-                logger.error(f"Pydantic parsing failed: {pe}")
-                # Fallback to original parsing
-                chain_with_parser = report_prompt | llm | parser
-                output = await chain_with_parser.ainvoke({"analysis_data": analysis_result})
-            
-            # POST-PROCESSING: Additional safety checks on the parsed object
-            output_dict = output.dict()
-            
-            # Fix internal_career_opportunities key naming
-            internal_career = output_dict.get("internal_career_opportunities", {})
-            
-            # 1. Remap transition_timeline -> progress_transition_timeline
-            if "transition_timeline" in internal_career and "progress_transition_timeline" not in internal_career:
-                internal_career["progress_transition_timeline"] = internal_career.pop("transition_timeline")
-                logger.warning("Remapped 'transition_timeline' -> 'progress_transition_timeline'")
-            
-            # 2. Fix numeric timeline keys (6_months -> six_months, etc.) - COMPREHENSIVE
-            progress_timeline = internal_career.get("progress_transition_timeline", {})
-            if progress_timeline:
-                key_mappings = {
-                    "6_months": "six_months",
-                    "6_month": "six_months",
-                    "1_year": "one_year", 
-                    "1_years": "one_year",
-                    "2_years": "two_years",
-                    "2_year": "two_years",
-                    "3_years": "three_years",
-                    "3_year": "three_years",
-                    "4_years": "four_years",
-                    "4_year": "four_years",
-                    "5_years": "five_years",
-                    "5_year": "five_years",
-                    "7_years": "seven_years",
-                    "7_year": "seven_years",
-                    "8_years": "eight_years",
-                    "8_year": "eight_years",
-                    "9_years": "nine_years",
-                    "9_year": "nine_years",
-                    "10_years": "ten_years",
-                    "10_year": "ten_years",
-                }
-                
-                for old_key, new_key in key_mappings.items():
-                    if old_key in progress_timeline:
-                        progress_timeline[new_key] = progress_timeline.pop(old_key)
-                        logger.warning(f"Remapped timeline key: '{old_key}' -> '{new_key}'")
-            
-            # 3. Fix career pathway keys (spaces -> underscores)
-            career_pathways = internal_career.get("career_pathways", {})
-            if career_pathways:
-                pathway_mappings = {
-                    "Development Track": "Development_Track",
-                    "Security Track": "Security_Track", 
-                    "AI Track": "AI_Track",
-                    "Data Track": "Data_Track",
-                    "Leadership Track": "Leadership_Track"
-                }
-                
-                for old_key, new_key in pathway_mappings.items():
-                    if old_key in career_pathways:
-                        career_pathways[new_key] = career_pathways.pop(old_key)
-                        logger.warning(f"Remapped pathway key: '{old_key}' -> '{new_key}'")
-            
-            # 4. Apply similar fixes to other sections that might have problematic keys
-            def fix_dict_keys(data, section_name=""):
-                """Recursively fix dictionary keys to be GraphQL/Prisma compatible"""
-                if isinstance(data, dict):
-                    fixed_data = {}
-                    for key, value in data.items():
-                        # Replace spaces with underscores
-                        fixed_key = str(key).replace(" ", "_")
-                        # Replace other problematic characters
-                        fixed_key = re.sub(r'[^a-zA-Z0-9_]', '_', fixed_key)
-                        # Remove consecutive underscores
-                        fixed_key = re.sub(r'_+', '_', fixed_key).strip('_')
-                        
-                        if fixed_key != key:
-                            logger.debug(f"Fixed key in {section_name}: '{key}' -> '{fixed_key}'")
-                        
-                        fixed_data[fixed_key] = fix_dict_keys(value, section_name)
-                    return fixed_data
-                elif isinstance(data, list):
-                    return [fix_dict_keys(item, section_name) for item in data]
-                else:
-                    return data
-            
-            # Apply key fixes to all sections
-            output_dict = fix_dict_keys(output_dict, "report")
-            
-            # Generate risk analysis
-            risk_analysis = await cls._perform_risk_analysis(output_dict)
-
-            # Final canonicalization logging for internal_career_opportunities
-            try:
-                ico = output_dict.get('internal_career_opportunities', {})
-                if isinstance(ico, dict):
-                    timeline = ico.get('progress_transition_timeline') or ico.get('transition_timeline')
-                    if timeline and isinstance(timeline, dict):
-                        logger.info(f"Return canonicalization check - timeline keys: {list(timeline.keys())}")
-                        if 'transition_timeline' in ico:
-                            logger.warning("Return stage: unexpected 'transition_timeline' present")
-            except Exception as log_e:
-                logger.debug(f"Canonicalization logging skipped: {log_e}")
+            # Render and log the full prompt
+            full_prompt_str = report_prompt.format(analysis_data=analysis_result)
+            # logger.debug(f"Full prompt sent to LLM:\n{full_prompt_str}")
+            # print(f"\n===== FULL PROMPT TO LLM =====\n{full_prompt_str}\n==============================\n")
+        
+            chain = report_prompt | llm | parser
+            output = await chain.ainvoke({"analysis_data": analysis_result})
+            risk_analysis = await cls._perform_risk_analysis(output.dict())
          
             return {
                 "status": "success",
-                "report": output_dict,
+                "report": output.dict(),
                 "risk_analysis": risk_analysis,
                 "metadata": {
                     "processingTimestamp": "06:47 PM PKT, August 29, 2025",

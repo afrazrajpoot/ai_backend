@@ -28,10 +28,9 @@ class InternalCareerOpportunities(BaseModel):
     recommended_departments: List[str] = Field(description="Departments aligned with Genius Factor")
     specific_role_suggestions: List[str] = Field(description="3-5 internal position suggestions")
     career_pathways: Dict[str, str] = Field(description="Short-term and long-term career pathways")
-    # Handle both transition_timeline and progress_transition_timeline
-    progress_transition_timeline: Dict[str, str] = Field(
+    # Handle both transition_timeline and
+    transition_timeline: Dict[str, str] = Field(
         default={},
-        alias="transition_timeline",
         description="Six-month, One-year, Two-year pathways"
     )
     required_skill_development: List[str] = Field(description="Specific competencies to build")
