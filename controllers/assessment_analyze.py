@@ -4,21 +4,24 @@ from services.ai_service import AIService
 from utils.analyze_assessment import analyze_assessment_data
 from utils.logger import logger
 from services.notification_service import NotificationService
-from services.db_service import DBService
 from typing import Dict, Any
-import requests
-import asyncio
+from prisma import Prisma
+
+
 
 class AssessmentController:
     
     @staticmethod
     async def save_to_database(assessment_data: dict):
+
+        prisma = Prisma()
+        await prisma.connect()
+
         """
         Save assessment data to the database using Prisma
         """
         try:
             logger.info("Starting database save process for assessment data")
-            db = await DBService._get_db()
             logger.info("Database connection established")
             
             # Extract report data
@@ -28,7 +31,7 @@ class AssessmentController:
             # Get user details for hrId and department
             user_id = assessment_data["userId"]
             logger.info(f"Looking up user with ID: {user_id}")
-            user = await db.user.find_unique(
+            user = await prisma.user.find_unique(
                 where={"id": user_id}
             )
             
@@ -59,12 +62,14 @@ class AssessmentController:
             
             # Create the report
             logger.info("Creating individual employee report in database...")
-            saved_report = await db.individualemployeereport.create(
+            saved_report = await prisma.individualemployeereport.create(
                 data=report_data
             )
             
             logger.info(f"Successfully saved report to database with ID: {saved_report.id}")
+            prisma.disconnect()
             return {"status": "success", "report_id": saved_report.id}
+
             
         except Exception as e:
             logger.error(f"Error saving to database: {str(e)}")
@@ -152,30 +157,3 @@ class AssessmentController:
             
             raise HTTPException(status_code=500, detail=str(e))
 
-    # @staticmethod
-    # async def get_career_recommendations(analysis_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Endpoint for generating professional career recommendation report
-        """
-        try:
-            logger.info("Generating professional career recommendation report")
-            
-            # Call AIService to generate the report using Azure Chat model
-            recommendations = await AIService.generate_career_recommendation(analysis_data)
-            
-            if recommendations.get("status") != "success":
-                logger.error(f"Failed to generate recommendations: {recommendations.get('message', 'Unknown error')}")
-                raise HTTPException(status_code=500, detail="Failed to generate career recommendations")
-            
-            logger.info("Recommendations generated successfully")
-            
-            # Return only the report and metadata, excluding raw RAG data
-            return {
-                "status": "success",
-                "report": recommendations.get("report"),
-                "metadata": recommendations.get("metadata")
-            }
-            
-        except Exception as e:
-            logger.error(f"Error in get_career_recommendations: {str(e)}")
-            raise HTTPException(status_code=500, detail=str(e))
