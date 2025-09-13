@@ -48,13 +48,25 @@ class AssessmentController:
                 # Handle keys starting with numbers
                 if re.match(r'^\d', str_key):
                     # Match one or more leading digits
-                    leading_num = re.match(r'^\d+', str_key).group()
-                    # Convert number to word if possible
-                    word = AssessmentController.number_words.get(leading_num, f"num{leading_num}")
-                    str_key = str_key.replace(leading_num, word, 1)
+                    match = re.match(r'^\d+', str_key)
+                    if match:
+                        leading_num = match.group()
+                        # Convert number to word if possible
+                        word = AssessmentController.number_words.get(leading_num, f"num{leading_num}")
+                        str_key = str_key.replace(leading_num, word, 1)
+                        logger.debug(f"Converted numeric key: '{key}' -> '{str_key}' (replaced '{leading_num}' with '{word}')")
 
                 # Replace invalid characters with underscore
                 sanitized_key = re.sub(r'[^a-zA-Z0-9_]', '_', str_key)
+
+                # Ensure key starts with a letter (GraphQL requirement)
+                if sanitized_key and not re.match(r'^[a-zA-Z]', sanitized_key):
+                    if re.match(r'^\d', sanitized_key):
+                        # If it still starts with a number, prefix with 'key_'
+                        sanitized_key = 'key_' + sanitized_key
+                    elif sanitized_key.startswith('_'):
+                        # If it starts with underscore, prefix with 'field'
+                        sanitized_key = 'field' + sanitized_key
 
                 # Log transformation for debugging
                 if sanitized_key != key:
@@ -98,15 +110,16 @@ class AssessmentController:
             
             logger.info(f"User found: {user.id}, hrId: {user.hrId}, department: {user.department}")
             
-            # Process JSON fields with key sanitization
+            # Process JSON fields with proper Prisma formatting
             def process_json_field(data):
                 if not data:
-                    return {}
+                    return {}  # Return empty dict for Prisma
                 try:
+                    logger.debug(f"Processing JSON field with keys: {list(data.keys())[:5]}...")  # Log first 5 keys
                     # First sanitize the keys
                     sanitized = AssessmentController.sanitize_json_keys(data)
-                    # Then test JSON serialization
-                    json.dumps(sanitized)
+                    logger.debug(f"Sanitized JSON field with keys: {list(sanitized.keys())[:5]}...")  # Log first 5 sanitized keys
+                    # Return as dict for Prisma (not JSON string)
                     return sanitized
                 except (TypeError, ValueError) as e:
                     logger.error(f"JSON processing failed: {e}")
