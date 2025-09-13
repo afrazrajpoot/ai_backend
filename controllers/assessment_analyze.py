@@ -4,6 +4,7 @@ from services.ai_service import AIService
 from utils.analyze_assessment import analyze_assessment_data
 from utils.logger import logger
 from services.notification_service import NotificationService
+from services.db_service import DBService
 from typing import Dict, Any
 import requests
 import asyncio
@@ -27,6 +28,51 @@ class AssessmentController:
             
         except requests.exceptions.RequestException as e:
             logger.error(f"Error calling Next.js API: {e}")
+            return {"status": "error", "message": str(e)}
+
+    @staticmethod
+    async def save_to_database(assessment_data: dict):
+        """
+        Save assessment data to the database using Prisma
+        """
+        try:
+            db = await DBService._get_db()
+            
+            # Extract report data
+            report = assessment_data.get("report", {})
+            
+            # Get user details for hrId and department
+            user = await db.user.find_unique(
+                where={"id": assessment_data["userId"]}
+            )
+            
+            if not user:
+                raise ValueError("User not found")
+            
+            # Create the report
+            saved_report = await db.individualemployeereport.create(
+                data={
+                    "userId": assessment_data["userId"],
+                    "hrId": user.hrId,
+                    "departement": user.department[-1] if user.department else "General",
+                    "executiveSummary": report.get("executive_summary", ""),
+                    "geniusFactorProfileJson": report.get("genius_factor_profile", {}),
+                    "currentRoleAlignmentAnalysisJson": report.get("current_role_alignment_analysis", {}),
+                    "internalCareerOpportunitiesJson": report.get("internal_career_opportunities", {}),
+                    "retentionAndMobilityStrategiesJson": report.get("retention_and_mobility_strategies", {}),
+                    "developmentActionPlanJson": report.get("development_action_plan", {}),
+                    "personalizedResourcesJson": report.get("personalized_resources", {}),
+                    "dataSourcesAndMethodologyJson": report.get("data_sources_and_methodology", {}),
+                    "geniusFactorScore": report.get("genius_factor_score", 0),
+                    "risk_analysis": assessment_data.get("risk_analysis", {})
+                }
+            )
+            
+            logger.info(f"Successfully saved report to database: {saved_report.id}")
+            return {"status": "success", "report_id": saved_report.id}
+            
+        except Exception as e:
+            logger.error(f"Error saving to database: {str(e)}")
             return {"status": "error", "message": str(e)}
     
     @staticmethod
@@ -102,12 +148,12 @@ class AssessmentController:
                 "metadata": recommendations.get("metadata")
             }
 
-            # 4. Send data to Next.js API (synchronous call)
-            nextjs_response = AssessmentController.send_to_nextjs(final_result)
+            # 4. Save data to database (synchronous call)
+            db_response = await AssessmentController.save_to_database(final_result)
             
-            if nextjs_response.get("status") == "error":
-                logger.warning(f"Next.js API call failed but proceeding: {nextjs_response.get('message')}")
-                # Continue even if Next.js call fails, but log the warning
+            if db_response.get("status") == "error":
+                logger.warning(f"Database save failed but proceeding: {db_response.get('message')}")
+                # Continue even if database save fails, but log the warning
 
             # Send success notification via Socket.IO
             await NotificationService.send_user_notification(
@@ -116,8 +162,8 @@ class AssessmentController:
                     'message': 'Assessment analysis completed successfully!',
                     'progress': 100,
                     'status': 'completed',
-                    'report_id': recommendations.get("metadata", {}).get("report_id"),
-                    'nextjs_response': nextjs_response
+                    'report_id': db_response.get("report_id"),
+                    'db_response': db_response
                 }
             )
 
