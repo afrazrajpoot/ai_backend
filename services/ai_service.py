@@ -279,12 +279,35 @@ class AIService:
                 if not system_prompt:
                     raise ValueError("System prompt not found in JSON file")
 
+            # Add key naming reinforcement to the system prompt
+            key_naming_instruction = """
+            
+CRITICAL KEY NAMING REQUIREMENTS:
+- In the "internal_career_opportunities" object, the timeline field MUST use the exact key name: "progress_transition_timeline"
+- Do NOT use "transition_timeline". Only "progress_transition_timeline" is valid.
+- For timeline keys, use: "six_months", "one_year", "two_years" (not "6_months", "1_year", "2_years")
+- For career pathway keys, use underscores instead of spaces: "Development_Track", "Security_Track", "AI_Track"
+
+Example structure:
+"internal_career_opportunities": {
+    "progress_transition_timeline": {
+        "six_months": "Transition into a Technical Lead role...",
+        "one_year": "Move into a CTO position...",
+        "two_years": "Establish thought leadership..."
+    },
+    "career_pathways": {
+        "Development_Track": "Engineer → Senior → Lead → CTO",
+        "Security_Track": "Analyst → Engineer → Architect → CISO"
+    }
+}
+            """
+
             # Initialize Pydantic output parser
             parser = PydanticOutputParser(pydantic_object=IndividualEmployeeReport)
 
-            # Prompt template with format instructions
+            # Enhanced prompt template with key naming instructions
             report_prompt = PromptTemplate(
-                template=system_prompt + "\n\nAnalysis Data:\n{analysis_data}\n\n{format_instructions}\nGenerate the report:",
+                template=system_prompt + key_naming_instruction + "\n\nAnalysis Data:\n{analysis_data}\n\n{format_instructions}\nGenerate the report:",
                 input_variables=["analysis_data"],
                 partial_variables={"format_instructions": parser.get_format_instructions()}
             )
@@ -292,18 +315,86 @@ class AIService:
             # Log the analysis data
             logger.debug(f"Analysis data: {analysis_result}")
 
-            # Render and log the full prompt
-            full_prompt_str = report_prompt.format(analysis_data=analysis_result)
-            # logger.debug(f"Full prompt sent to LLM:\n{full_prompt_str}")
-            # print(f"\n===== FULL PROMPT TO LLM =====\n{full_prompt_str}\n==============================\n")
-        
+            # Generate the report
             chain = report_prompt | llm | parser
             output = await chain.ainvoke({"analysis_data": analysis_result})
-            risk_analysis = await cls._perform_risk_analysis(output.dict())
+            
+            # POST-PROCESSING: Fix any key naming issues
+            output_dict = output.dict()
+            
+            # Fix internal_career_opportunities key naming
+            internal_career = output_dict.get("internal_career_opportunities", {})
+            
+            # 1. Remap transition_timeline -> progress_transition_timeline
+            if "transition_timeline" in internal_career and "progress_transition_timeline" not in internal_career:
+                internal_career["progress_transition_timeline"] = internal_career.pop("transition_timeline")
+                logger.warning("Remapped 'transition_timeline' -> 'progress_transition_timeline'")
+            
+            # 2. Fix numeric timeline keys (6_months -> six_months, etc.)
+            progress_timeline = internal_career.get("progress_transition_timeline", {})
+            if progress_timeline:
+                key_mappings = {
+                    "6_months": "six_months",
+                    "1_year": "one_year", 
+                    "2_years": "two_years",
+                    "6_month": "six_months",
+                    "1_year": "one_year",
+                    "2_year": "two_years"
+                }
+                
+                for old_key, new_key in key_mappings.items():
+                    if old_key in progress_timeline:
+                        progress_timeline[new_key] = progress_timeline.pop(old_key)
+                        logger.warning(f"Remapped timeline key: '{old_key}' -> '{new_key}'")
+            
+            # 3. Fix career pathway keys (spaces -> underscores)
+            career_pathways = internal_career.get("career_pathways", {})
+            if career_pathways:
+                pathway_mappings = {
+                    "Development Track": "Development_Track",
+                    "Security Track": "Security_Track", 
+                    "AI Track": "AI_Track",
+                    "Data Track": "Data_Track",
+                    "Leadership Track": "Leadership_Track"
+                }
+                
+                for old_key, new_key in pathway_mappings.items():
+                    if old_key in career_pathways:
+                        career_pathways[new_key] = career_pathways.pop(old_key)
+                        logger.warning(f"Remapped pathway key: '{old_key}' -> '{new_key}'")
+            
+            # 4. Apply similar fixes to other sections that might have problematic keys
+            def fix_dict_keys(data, section_name=""):
+                """Recursively fix dictionary keys to be GraphQL/Prisma compatible"""
+                if isinstance(data, dict):
+                    fixed_data = {}
+                    for key, value in data.items():
+                        # Replace spaces with underscores
+                        fixed_key = str(key).replace(" ", "_")
+                        # Replace other problematic characters
+                        fixed_key = re.sub(r'[^a-zA-Z0-9_]', '_', fixed_key)
+                        # Remove consecutive underscores
+                        fixed_key = re.sub(r'_+', '_', fixed_key).strip('_')
+                        
+                        if fixed_key != key:
+                            logger.debug(f"Fixed key in {section_name}: '{key}' -> '{fixed_key}'")
+                        
+                        fixed_data[fixed_key] = fix_dict_keys(value, section_name)
+                    return fixed_data
+                elif isinstance(data, list):
+                    return [fix_dict_keys(item, section_name) for item in data]
+                else:
+                    return data
+            
+            # Apply key fixes to all sections
+            output_dict = fix_dict_keys(output_dict, "report")
+            
+            # Generate risk analysis
+            risk_analysis = await cls._perform_risk_analysis(output_dict)
          
             return {
                 "status": "success",
-                "report": output.dict(),
+                "report": output_dict,
                 "risk_analysis": risk_analysis,
                 "metadata": {
                     "processingTimestamp": "06:47 PM PKT, August 29, 2025",
