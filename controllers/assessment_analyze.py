@@ -162,8 +162,52 @@ class AssessmentController:
             report_raw = assessment_data.get("report", {}) or {}
             logger.info(f"Extracted report data: {bool(report_raw)}")
 
-            # 1) Sanitize whole report keys
+            # 1) Sanitize whole report keys with enhanced sanitization
             sanitized_report = AssessmentController.sanitize_json_keys(report_raw)
+            
+            # 2) Apply additional aggressive sanitization for problematic keys
+            def extra_sanitize_keys(obj, depth=0):
+                if isinstance(obj, dict):
+                    result = {}
+                    for key, value in obj.items():
+                        # Convert key to string and apply comprehensive fixes
+                        str_key = str(key)
+                        
+                        # Fix common problematic patterns
+                        fixed_key = str_key
+                        
+                        # Replace spaces with underscores
+                        if " " in fixed_key:
+                            fixed_key = fixed_key.replace(" ", "_")
+                            logger.warning(f"Fixed space in key: '{key}' -> '{fixed_key}'")
+                        
+                        # Replace other problematic characters
+                        original_key = fixed_key
+                        fixed_key = re.sub(r'[^a-zA-Z0-9_]', '_', fixed_key)
+                        if fixed_key != original_key:
+                            logger.warning(f"Fixed special chars in key: '{original_key}' -> '{fixed_key}'")
+                        
+                        # Remove consecutive underscores
+                        fixed_key = re.sub(r'_+', '_', fixed_key).strip('_')
+                        
+                        # Ensure starts with letter
+                        if fixed_key and not re.match(r'^[a-zA-Z]', fixed_key):
+                            fixed_key = 'field_' + fixed_key
+                        
+                        # Ensure not empty
+                        if not fixed_key:
+                            fixed_key = f'field_{hash(str(key)) % 1000}'
+                        
+                        # Recursively process the value
+                        result[fixed_key] = extra_sanitize_keys(value, depth + 1)
+                    return result
+                elif isinstance(obj, list):
+                    return [extra_sanitize_keys(item, depth + 1) for item in obj]
+                else:
+                    return obj
+            
+            # Apply extra sanitization
+            sanitized_report = extra_sanitize_keys(sanitized_report)
 
             # 2) If internal_career_opportunities.progress_transition_timeline exists, normalize its keys
             if isinstance(sanitized_report.get("internal_career_opportunities"), dict):
