@@ -16,7 +16,7 @@ class AssessmentController:
         Send assessment data to Next.js API endpoint
         """
         try:
-            url = "http://localhost:3000/api/generate-report"
+            url = "https://geniusfactor.ai/api/generate-report"
             headers = {"Content-Type": "application/json"}
             
             response = requests.post(url, json=assessment_data, headers=headers)
