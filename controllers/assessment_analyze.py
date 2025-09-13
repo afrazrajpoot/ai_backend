@@ -89,7 +89,7 @@ class AssessmentController:
     @staticmethod
     def normalize_timeline_keys(timeline_obj: dict) -> dict:
         """
-        Specifically normalize keys in transition_timeline objects.
+        Specifically normalize keys in progress_transition_timeline objects.
         Accepts keys like '6_month', '6-month', '6 month', '6months', '6_months'
         and returns keys like 'six_month'.
 
@@ -149,7 +149,7 @@ class AssessmentController:
     async def save_to_database(assessment_data: dict):
         """
         Save assessment data to the database using Prisma.
-        Sanitizes entire report first, then specifically normalizes transition_timeline.
+        Sanitizes entire report first, then specifically normalizes progress_transition_timeline.
         """
         prisma = Prisma()
         await prisma.connect()
@@ -165,15 +165,15 @@ class AssessmentController:
             # 1) Sanitize whole report keys
             sanitized_report = AssessmentController.sanitize_json_keys(report_raw)
 
-            # 2) If internal_career_opportunities.transition_timeline exists, normalize its keys
+            # 2) If internal_career_opportunities.progress_transition_timeline exists, normalize its keys
             if isinstance(sanitized_report.get("internal_career_opportunities"), dict):
                 internal_career = sanitized_report["internal_career_opportunities"]
-                if isinstance(internal_career.get("transition_timeline"), dict):
-                    normalized_timeline = AssessmentController.normalize_timeline_keys(internal_career["transition_timeline"])
-                    sanitized_report["internal_career_opportunities"]["transition_timeline"] = normalized_timeline
-                    logger.info(f"Normalized transition_timeline keys: {list(normalized_timeline.keys())}")
+                if isinstance(internal_career.get("progress_transition_timeline"), dict):
+                    normalized_timeline = AssessmentController.normalize_timeline_keys(internal_career["progress_transition_timeline"])
+                    sanitized_report["internal_career_opportunities"]["progress_transition_timeline"] = normalized_timeline
+                    logger.info(f"Normalized progress_transition_timeline keys: {list(normalized_timeline.keys())}")
                 else:
-                    logger.debug("No transition_timeline dict found to normalize.")
+                    logger.debug("No progress_transition_timeline dict found to normalize.")
             else:
                 logger.debug("No internal_career_opportunities present or not a dict.")
 
@@ -202,7 +202,7 @@ class AssessmentController:
 
             # Debug output right before insert
             logger.info(f"Prepared sanitized keys for insert. Internal career transition keys: "
-                        f"{list(internal_career_json.get('transition_timeline', {}).keys()) if isinstance(internal_career_json, dict) else 'n/a'}")
+                        f"{list(internal_career_json.get('progress_transition_timeline', {}).keys()) if isinstance(internal_career_json, dict) else 'n/a'}")
 
             # Prepare data for report creation (use sanitized_report for string fields too)
             report_data = {

@@ -45,7 +45,7 @@ SAMPLE_REPORT_DATA = {
                 "Security Track": "Security Analyst → Security Engineer → CISO",
                 "AI Track": "Data Scientist → ML Engineer → AI Director"
             },
-            "transition_timeline": {
+            "progress_transition_timeline": {
                 "6_months": "Transition to Technical Lead role",
                 "1_year": "Move to CTO position",
                 "2_years": "Establish thought leadership"
