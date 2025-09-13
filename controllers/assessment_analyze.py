@@ -4,7 +4,7 @@ from services.ai_service import AIService
 from utils.analyze_assessment import analyze_assessment_data
 from utils.logger import logger
 from services.notification_service import NotificationService
-from typing import Dict, Any, Union
+from typing import Dict, Any, Union, List
 from prisma import Prisma
 import json
 
