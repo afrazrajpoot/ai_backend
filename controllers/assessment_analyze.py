@@ -8,6 +8,7 @@ from utils.logger import logger
 from services.notification_service import NotificationService
 from typing import Dict, Any
 import httpx
+from prisma import Prisma
 
 # Singleton AIService instance (assumed to be defined elsewhere)
 ai_service = AIService()
@@ -16,27 +17,64 @@ ai_service = AIService()
 db_notification_service = DBService()
 
 class AssessmentController:
+
     
     @staticmethod
-    async def send_to_nextjs(assessment_data: dict):
-        """
-        Send assessment data to Next.js API endpoint asynchronously
-        """
+    async def save_to_database(data: Dict[str, Any]) -> Dict[str, Any]:
         try:
-            url = "https://geniusfactor.ai/api/generate-report"
-            headers = {"Content-Type": "application/json"}
-            
-            async with httpx.AsyncClient() as client:
-                response = await client.post(url, json=assessment_data, headers=headers)
-                response.raise_for_status()
-
-            logger.info(f"Successfully sent data to Next.js: {response.json()}")
-            return response.json()
-            
+            prisma = Prisma()
+            await prisma.connect()
+            return await prisma.individualemployeereport.create(
+                data={
+                    "userId": data["userId"],
+                    "executiveSummary": data["report"].get("executive_summary", ""),
+                    "hrId": data.get("hrId"),
+                    "departement": data["report"].get("department", ""),
+                    "geniusFactorScore": data["report"].get("genius_factor_score", 0),
+                    "geniusFactorProfileJson": data["report"].get("genius_factor_profile", {}),
+                    "currentRoleAlignmentAnalysisJson": data["report"].get("current_role_alignment_analysis", {}),
+                    "internalCareerOpportunitiesJson": data["report"].get("internal_career_opportunities", {}),
+                    "retentionAndMobilityStrategiesJson": data["report"].get("retention_and_mobility_strategies", {}),
+                    "developmentActionPlanJson": data["report"].get("development_action_plan", {}),
+                    "personalizedResourcesJson": data["report"].get("personalized_resources", {}),
+                    "dataSourcesAndMethodologyJson": data["report"].get("data_sources_and_methodology", {}),
+                    "risk_analysis": data.get("risk_analysis", {}),
+                }
+            )
         except Exception as e:
-            logger.error(f"Error calling Next.js API: {e}")
-            return {"status": "error", "message": str(e)}
-    
+            logger.error(f"Primary save failed: {str(e)}")
+
+            # Fallback attempt with minimal required fields
+            try:
+                prisma = Prisma()
+                await prisma.connect()
+                fallback_report = await prisma.individualemployeereport.create(
+                    data={
+                        "userId": data.get("userId", "unknown"),
+                        "executiveSummary": "Fallback report due to DB error",
+                        "hrId": data.get("hrId"),
+                        "departement": "unknown",
+                        "geniusFactorScore": 0,
+                        "geniusFactorProfileJson": {},
+                        "currentRoleAlignmentAnalysisJson": {},
+                        "internalCareerOpportunitiesJson": {},
+                        "retentionAndMobilityStrategiesJson": {},
+                        "developmentActionPlanJson": {},
+                        "personalizedResourcesJson": {},
+                        "dataSourcesAndMethodologyJson": {},
+                        "risk_analysis": {"error": str(e)},
+                    }
+                )
+                logger.warning("Fallback report saved successfully")
+                return {
+                    "status": "warning",
+                    "message": "Fallback report saved due to DB error",
+                    "report": fallback_report,
+                }
+            except Exception as fallback_error:
+                logger.critical(f"Fallback save also failed: {str(fallback_error)}")
+                raise HTTPException(status_code=500, detail=f"Both primary and fallback save failed: {str(fallback_error)}")
+
     @staticmethod
     async def analyze_assessment(input_data: AssessmentData) -> Dict[str, Any]:
         """
@@ -148,7 +186,7 @@ class AssessmentController:
             }
 
             # 4. Send data to Next.js API (asynchronous call)
-            nextjs_response = await AssessmentController.send_to_nextjs(final_result)
+            nextjs_response = await AssessmentController.save_to_database(final_result)
             
             if nextjs_response.get("status") == "error":
                 logger.warning(f"Next.js API call failed but proceeding: {nextjs_response.get('message')}")
@@ -204,31 +242,4 @@ class AssessmentController:
                 }
             )
             
-            raise HTTPException(status_code=500, detail=str(e))
-
-    @staticmethod
-    async def get_career_recommendations(analysis_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Endpoint for generating professional career recommendation report
-        """
-        try:
-            logger.info("Generating professional career recommendation report")
-            
-            # Call AIService to generate the report
-            recommendations = await ai_service.generate_career_recommendation(analysis_data)
-            
-            if recommendations.get("status") != "success":
-                logger.error(f"Failed to generate recommendations: {recommendations.get('message', 'Unknown error')}")
-                raise HTTPException(status_code=500, detail="Failed to generate career recommendations")
-            
-            logger.info("Recommendations generated successfully")
-            
-            return {
-                "status": "success",
-                "report": recommendations.get("report"),
-                "metadata": recommendations.get("metadata")
-            }
-            
-        except Exception as e:
-            logger.error(f"Error in get_career_recommendations: {str(e)}")
             raise HTTPException(status_code=500, detail=str(e))

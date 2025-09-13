@@ -29,10 +29,10 @@ class InternalCareerOpportunities(BaseModel):
     specific_role_suggestions: List[str] = Field(description="3-5 internal position suggestions")
     career_pathways: Dict[str, str] = Field(description="Short-term and long-term career pathways")
     # Handle both transition_timeline and
-    transition_timeline: Dict[str, str] = Field(
-        default={},
-        description="Six-month, One-year, Two-year pathways"
-    )
+    # transition_timeline: Dict[str, str] = Field(
+    #     default={},
+    #     description="six_months, one_year, two_year pathways"
+    # )
     required_skill_development: List[str] = Field(description="Specific competencies to build")
 
     class Config:
