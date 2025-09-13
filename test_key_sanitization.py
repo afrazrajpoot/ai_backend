@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test script to validate GraphQL key sanitization fixes
+Test script to validate key sanitization fixes
 """
 import json
 import re
@@ -101,11 +101,11 @@ def test_key_sanitization():
         print(f"\n❌ STILL FOUND PROBLEMATIC KEYS: {problematic_keys}")
         return False
     else:
-        print("\n✅ ALL KEYS ARE NOW GRAPHQL-COMPATIBLE!")
+        print("\n✅ ALL KEYS ARE NOW-COMPATIBLE!")
         return True
 
 if __name__ == "__main__":
-    print("Starting GraphQL key sanitization tests")
+    print("Starting  key sanitization tests")
 
     success = test_key_sanitization()
 
