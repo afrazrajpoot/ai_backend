@@ -4,48 +4,13 @@ from services.ai_service import AIService
 from utils.analyze_assessment import analyze_assessment_data
 from utils.logger import logger
 from services.notification_service import NotificationService
-from typing import Dict, Any, Union, List
+from typing import Dict, Any
 from prisma import Prisma
 import json
 
 
 class AssessmentController:
     
-    @staticmethod
-    def sanitize_and_validate_json(obj: Any) -> Union[Dict, List, None]:
-        """
-        Sanitize keys and validate JSON data for Prisma
-        """
-        def sanitize_keys(data):
-            if isinstance(data, dict):
-                # Handle empty dict
-                if not data:
-                    return {}
-                return {str(k).replace("[", "_").replace("]", "_"): sanitize_keys(v) for k, v in data.items()}
-            elif isinstance(data, list):
-                return [sanitize_keys(i) for i in data]
-            elif data is None:
-                return None
-            else:
-                return data
-
-        try:
-            sanitized = sanitize_keys(obj)
-            
-            # Validate that the result is JSON serializable
-            json.dumps(sanitized)
-            
-            # Return None for empty objects to use JsonNullValueInput
-            if sanitized == {} or sanitized is None:
-                return None
-                
-            return sanitized
-            
-        except (TypeError, ValueError) as e:
-            logger.error(f"JSON serialization error: {e}")
-            logger.error(f"Problematic data: {obj}")
-            return None
-
     @staticmethod
     async def save_to_database(assessment_data: dict):
         """
@@ -75,64 +40,87 @@ class AssessmentController:
             
             logger.info(f"User found: {user.id}, hrId: {user.hrId}, department: {user.department}")
             
-            # Process JSON fields with proper validation
-            genius_factor_profile = AssessmentController.sanitize_and_validate_json(
-                report.get("genius_factor_profile", {})
-            )
-            current_role_alignment = AssessmentController.sanitize_and_validate_json(
-                report.get("current_role_alignment_analysis", {})
-            )
-            internal_career_opportunities = AssessmentController.sanitize_and_validate_json(
-                report.get("internal_career_opportunities", {})
-            )
-            retention_strategies = AssessmentController.sanitize_and_validate_json(
-                report.get("retention_and_mobility_strategies", {})
-            )
-            development_action_plan = AssessmentController.sanitize_and_validate_json(
-                report.get("development_action_plan", {})
-            )
-            personalized_resources = AssessmentController.sanitize_and_validate_json(
-                report.get("personalized_resources", {})
-            )
-            data_sources_methodology = AssessmentController.sanitize_and_validate_json(
-                report.get("data_sources_and_methodology", {})
-            )
-            risk_analysis = AssessmentController.sanitize_and_validate_json(
-                assessment_data.get("risk_analysis", {})
-            )
+            # DEBUGGING: Log the raw data types and content
+            genius_factor_raw = report.get("genius_factor_profile", {})
+            logger.info(f"Raw genius_factor_profile type: {type(genius_factor_raw)}")
+            logger.info(f"Raw genius_factor_profile content: {genius_factor_raw}")
             
-            # Log the processed data for debugging
-            logger.info(f"Genius factor profile type: {type(genius_factor_profile)}")
-            logger.info(f"Genius factor profile content: {genius_factor_profile}")
+            # Direct JSON processing - NO sanitize_keys function
+            # Just ensure the data is JSON serializable
+            try:
+                genius_factor_json = json.loads(json.dumps(genius_factor_raw)) if genius_factor_raw else {}
+                logger.info(f"Processed genius_factor_profile: {type(genius_factor_json)}")
+                logger.info(f"JSON test passed for genius_factor_profile")
+            except (TypeError, ValueError) as e:
+                logger.error(f"JSON processing failed for genius_factor_profile: {e}")
+                genius_factor_json = {}
+            
+            try:
+                current_role_json = json.loads(json.dumps(report.get("current_role_alignment_analysis", {})))
+            except (TypeError, ValueError) as e:
+                logger.error(f"JSON processing failed for current_role_alignment_analysis: {e}")
+                current_role_json = {}
+                
+            try:
+                internal_career_json = json.loads(json.dumps(report.get("internal_career_opportunities", {})))
+            except (TypeError, ValueError) as e:
+                logger.error(f"JSON processing failed for internal_career_opportunities: {e}")
+                internal_career_json = {}
+                
+            try:
+                retention_strategies_json = json.loads(json.dumps(report.get("retention_and_mobility_strategies", {})))
+            except (TypeError, ValueError) as e:
+                logger.error(f"JSON processing failed for retention_and_mobility_strategies: {e}")
+                retention_strategies_json = {}
+                
+            try:
+                development_plan_json = json.loads(json.dumps(report.get("development_action_plan", {})))
+            except (TypeError, ValueError) as e:
+                logger.error(f"JSON processing failed for development_action_plan: {e}")
+                development_plan_json = {}
+                
+            try:
+                personalized_resources_json = json.loads(json.dumps(report.get("personalized_resources", {})))
+            except (TypeError, ValueError) as e:
+                logger.error(f"JSON processing failed for personalized_resources: {e}")
+                personalized_resources_json = {}
+                
+            try:
+                data_sources_json = json.loads(json.dumps(report.get("data_sources_and_methodology", {})))
+            except (TypeError, ValueError) as e:
+                logger.error(f"JSON processing failed for data_sources_and_methodology: {e}")
+                data_sources_json = {}
+                
+            try:
+                risk_analysis_json = json.loads(json.dumps(assessment_data.get("risk_analysis", {})))
+            except (TypeError, ValueError) as e:
+                logger.error(f"JSON processing failed for risk_analysis: {e}")
+                risk_analysis_json = {}
             
             # Prepare data for report creation
             report_data = {
                 "userId": user_id,
                 "hrId": user.hrId,
                 "departement": user.department[-1] if user.department else "General",
-                "executiveSummary": report.get("executive_summary", ""),
+                "executiveSummary": str(report.get("executive_summary", "")),
                 "geniusFactorScore": int(report.get("genius_factor_score", 0)),
-                "risk_analysis": risk_analysis,
+                "geniusFactorProfileJson": genius_factor_json,
+                "currentRoleAlignmentAnalysisJson": current_role_json,
+                "internalCareerOpportunitiesJson": internal_career_json,
+                "retentionAndMobilityStrategiesJson": retention_strategies_json,
+                "developmentActionPlanJson": development_plan_json,
+                "personalizedResourcesJson": personalized_resources_json,
+                "dataSourcesAndMethodologyJson": data_sources_json,
+                "risk_analysis": risk_analysis_json,
             }
-            
-            # Only add JSON fields if they're not None
-            if genius_factor_profile is not None:
-                report_data["geniusFactorProfileJson"] = genius_factor_profile
-            if current_role_alignment is not None:
-                report_data["currentRoleAlignmentAnalysisJson"] = current_role_alignment
-            if internal_career_opportunities is not None:
-                report_data["internalCareerOpportunitiesJson"] = internal_career_opportunities
-            if retention_strategies is not None:
-                report_data["retentionAndMobilityStrategiesJson"] = retention_strategies
-            if development_action_plan is not None:
-                report_data["developmentActionPlanJson"] = development_action_plan
-            if personalized_resources is not None:
-                report_data["personalizedResourcesJson"] = personalized_resources
-            if data_sources_methodology is not None:
-                report_data["dataSourcesAndMethodologyJson"] = data_sources_methodology
 
             logger.info("Prepared report data for creation")
             logger.info(f"Report data keys: {list(report_data.keys())}")
+            
+            # DEBUGGING: Log each JSON field type
+            for key, value in report_data.items():
+                if "Json" in key or key == "risk_analysis":
+                    logger.info(f"{key} type: {type(value)}, empty: {not bool(value)}")
             
             # Create the report
             logger.info("Creating individual employee report in database...")
