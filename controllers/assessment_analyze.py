@@ -1,8 +1,6 @@
-
-
+import asyncpg
 from schemas.assessment import AssessmentData
 from typing import Dict, Any
-from prisma import Prisma
 from utils.logger import logger
 
 
@@ -11,8 +9,9 @@ class AssessmentController:
     @staticmethod
     async def analyze_assessment(input_data: AssessmentData) -> Dict[str, Any]:
         """
-        Minimal version: just saves hardcoded data for testing DB persistence.
+        Minimal version: saves hardcoded data using raw PostgreSQL (asyncpg).
         """
+
         hardcoded_data = {
         "userId": "33b003c7-ad86-4ecf-bb54-5b2a2c633926",
         "hrId": "42632d76-8d0d-4a59-af5c-b0172c5aaa6f",
@@ -188,14 +187,60 @@ class AssessmentController:
 },
         "geniusFactorScore": 85
     }
- 
+        
+        
+        # DATABASE_URL="postgresql://postgres:root@localhost:5432/genius_factor?schema=public"
+
         try:
-            prisma = Prisma()
-            await prisma.connect()
-            record = await prisma.individualemployeereport.create(data=hardcoded_data)
-            await prisma.disconnect()
-            logger.info("Hardcoded test data saved successfully")
-            return {"status": "success", "saved_record": record}
+            conn = await asyncpg.connect(
+                user="postgres",
+                password="root",
+                database="genius_factor",
+                host="localhost",
+                port=5432
+            )
+
+            query = """
+                INSERT INTO individualemployeereport (
+                    "userId",
+                    "hrId",
+                    "departement",
+                    "executiveSummary",
+                    "geniusFactorProfileJson",
+                    "currentRoleAlignmentAnalysisJson",
+                    "internalCareerOpportunitiesJson",
+                    "retentionAndMobilityStrategiesJson",
+                    "developmentActionPlanJson",
+                    "personalizedResourcesJson",
+                    "dataSourcesAndMethodologyJson",
+                    "risk_analysis",
+                    "geniusFactorScore"
+                )
+                VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb, $11::jsonb, $12::jsonb, $13::INT)
+                RETURNING id
+            """
+
+            record_id = await conn.fetchval(
+                query,
+                hardcoded_data["userId"],
+                hardcoded_data["hrId"],
+                hardcoded_data["departement"],
+                hardcoded_data["executiveSummary"],
+                hardcoded_data["geniusFactorProfileJson"],
+                hardcoded_data["currentRoleAlignmentAnalysisJson"],
+                hardcoded_data["internalCareerOpportunitiesJson"],
+                hardcoded_data["retentionAndMobilityStrategiesJson"],
+                hardcoded_data["developmentActionPlanJson"],
+                hardcoded_data["personalizedResourcesJson"],
+                hardcoded_data["dataSourcesAndMethodologyJson"],
+                hardcoded_data["risk_analysis"],
+                hardcoded_data["geniusFactorScore"]
+            )
+
+            await conn.close()
+            logger.info(f"Hardcoded test data saved successfully with id {record_id}")
+            return {"status": "success", "saved_record_id": record_id}
+
         except Exception as e:
             logger.error(f"Failed to save hardcoded data: {str(e)}")
             return {"status": "error", "message": str(e)}
