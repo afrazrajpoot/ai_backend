@@ -208,6 +208,51 @@ class AssessmentController:
             
             # Apply extra sanitization
             sanitized_report = extra_sanitize_keys(sanitized_report)
+            
+            # ADDITIONAL FIX: Specific handling for "6_months" key that might slip through
+            def fix_six_months_key(obj):
+                """Recursively fix any remaining '6_months' keys to 'six_months'"""
+                if isinstance(obj, dict):
+                    result = {}
+                    for key, value in obj.items():
+                        fixed_key = key
+                        if str(key) == "6_months":
+                            fixed_key = "six_months"
+                            logger.warning(f"Fixed remaining '6_months' key to 'six_months'")
+                        result[fixed_key] = fix_six_months_key(value)
+                    return result
+                elif isinstance(obj, list):
+                    return [fix_six_months_key(item) for item in obj]
+                else:
+                    return obj
+            
+            sanitized_report = fix_six_months_key(sanitized_report)
+            
+            # FINAL VALIDATION: Ensure all keys are GraphQL-compatible
+            def validate_graphql_keys(obj, path="root"):
+                """Validate that all keys are GraphQL-compatible"""
+                if isinstance(obj, dict):
+                    for key, value in obj.items():
+                        str_key = str(key)
+                        # Check for GraphQL-invalid patterns
+                        if re.match(r'^\d', str_key):  # Starts with number
+                            logger.error(f"INVALID KEY FOUND at {path}: '{str_key}' starts with number")
+                            raise ValueError(f"GraphQL key validation failed: '{str_key}' at {path} starts with number")
+                        if re.search(r'[^a-zA-Z0-9_]', str_key):  # Contains invalid characters
+                            logger.error(f"INVALID KEY FOUND at {path}: '{str_key}' contains invalid characters")
+                            raise ValueError(f"GraphQL key validation failed: '{str_key}' at {path} contains invalid characters")
+                        # Recursively validate nested objects
+                        validate_graphql_keys(value, f"{path}.{str_key}")
+                elif isinstance(obj, list):
+                    for i, item in enumerate(obj):
+                        validate_graphql_keys(item, f"{path}[{i}]")
+            
+            try:
+                validate_graphql_keys(sanitized_report)
+                logger.info("✅ All keys passed GraphQL validation")
+            except ValueError as ve:
+                logger.error(f"❌ GraphQL validation failed: {ve}")
+                raise ve
 
             # 2) If internal_career_opportunities.progress_transition_timeline exists, normalize its keys
             if isinstance(sanitized_report.get("internal_career_opportunities"), dict):

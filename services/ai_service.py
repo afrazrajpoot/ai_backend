@@ -283,22 +283,33 @@ class AIService:
             # Add key naming reinforcement to the system prompt
             key_naming_instruction = """
             
-CRITICAL KEY NAMING REQUIREMENTS:
+CRITICAL KEY NAMING REQUIREMENTS FOR GRAPHQL COMPATIBILITY:
 - In the "internal_career_opportunities" object, the timeline field MUST use the exact key name: "progress_transition_timeline"
 - Do NOT use "transition_timeline". Only "progress_transition_timeline" is valid.
-- For timeline keys, use: "six_months", "one_year", "two_years" (not "6_months", "1_year", "2_years")
+- For timeline keys, use ONLY these exact formats: "six_months", "one_year", "two_years" (NOT "6_months", "1_year", "2_years")
 - For career pathway keys, use underscores instead of spaces: "Development_Track", "Security_Track", "AI_Track"
+- NEVER start any key with a number (e.g., "6_months" is INVALID, use "six_months")
+- Replace all spaces in keys with underscores
+- Remove all special characters from keys except underscores
 
-Example structure:
+VALID EXAMPLE:
 "internal_career_opportunities": {
     "progress_transition_timeline": {
-        "six_months": "Transition into a Technical Lead role...",
-        "one_year": "Move into a CTO position...",
-        "two_years": "Establish thought leadership..."
+        "six_months": "Complete training in advanced UX design principles and tools.",
+        "one_year": "Take on lead design projects to build portfolio and experience.",
+        "two_years": "Pursue leadership roles in design or product management."
     },
     "career_pathways": {
         "Development_Track": "Engineer → Senior → Lead → CTO",
         "Security_Track": "Analyst → Engineer → Architect → CISO"
+    }
+}
+
+INVALID EXAMPLE (DO NOT USE):
+"internal_career_opportunities": {
+    "transition_timeline": {
+        "6_months": "Invalid - starts with number",
+        "1_year": "Invalid - starts with number"
     }
 }
             """
@@ -323,17 +334,31 @@ Example structure:
             # PRE-PROCESSING: Fix the raw text before Pydantic parsing
             raw_text = raw_output.content if hasattr(raw_output, 'content') else str(raw_output)
             
-            # Fix the problematic keys in the raw JSON string
+            # Fix the problematic keys in the raw JSON string - COMPREHENSIVE FIXES
             key_fixes = [
                 # Fix transition_timeline -> progress_transition_timeline
                 (r'"transition_timeline":', '"progress_transition_timeline":'),
-                # Fix numeric timeline keys
+                # Fix numeric timeline keys - COMPREHENSIVE
                 (r'"6_months":', '"six_months":'),
-                (r'"1_year":', '"one_year":'),
-                (r'"2_years":', '"two_years":'),
                 (r'"6_month":', '"six_months":'),
                 (r'"1_year":', '"one_year":'),
+                (r'"1_years":', '"one_year":'),
+                (r'"2_years":', '"two_years":'),
                 (r'"2_year":', '"two_years":'),
+                (r'"3_years":', '"three_years":'),
+                (r'"3_year":', '"three_years":'),
+                (r'"4_years":', '"four_years":'),
+                (r'"4_year":', '"four_years":'),
+                (r'"5_years":', '"five_years":'),
+                (r'"5_year":', '"five_years":'),
+                (r'"7_years":', '"seven_years":'),
+                (r'"7_year":', '"seven_years":'),
+                (r'"8_years":', '"eight_years":'),
+                (r'"8_year":', '"eight_years":'),
+                (r'"9_years":', '"nine_years":'),
+                (r'"9_year":', '"nine_years":'),
+                (r'"10_years":', '"ten_years":'),
+                (r'"10_year":', '"ten_years":'),
                 # Fix career pathway keys with spaces
                 (r'"Development Track":', '"Development_Track":'),
                 (r'"Security Track":', '"Security_Track":'),
@@ -342,14 +367,26 @@ Example structure:
                 (r'"Leadership Track":', '"Leadership_Track":'),
                 (r'"Tech Track":', '"Tech_Track":'),
                 (r'"Product Track":', '"Product_Track":'),
+                (r'"Design Track":', '"Design_Track":'),
+                (r'"Marketing Track":', '"Marketing_Track":'),
+                (r'"Engineering Track":', '"Engineering_Track":'),
+                # Fix any remaining problematic characters
+                (r'"short_term":', '"short_term":'),
+                (r'"long_term":', '"long_term":'),
             ]
             
             # Apply all the fixes
             fixed_text = raw_text
+            fixes_applied = []
             for old_pattern, new_pattern in key_fixes:
                 if old_pattern in fixed_text:
                     fixed_text = fixed_text.replace(old_pattern, new_pattern)
-                    logger.warning(f"Pre-processing fix applied: {old_pattern} -> {new_pattern}")
+                    fixes_applied.append(f"{old_pattern} -> {new_pattern}")
+            
+            if fixes_applied:
+                logger.info(f"Pre-processing fixes applied: {fixes_applied}")
+            else:
+                logger.debug("No pre-processing fixes needed")
             
             # Now parse with Pydantic using the fixed text
             try:
@@ -380,16 +417,30 @@ Example structure:
                 internal_career["progress_transition_timeline"] = internal_career.pop("transition_timeline")
                 logger.warning("Remapped 'transition_timeline' -> 'progress_transition_timeline'")
             
-            # 2. Fix numeric timeline keys (6_months -> six_months, etc.)
+            # 2. Fix numeric timeline keys (6_months -> six_months, etc.) - COMPREHENSIVE
             progress_timeline = internal_career.get("progress_transition_timeline", {})
             if progress_timeline:
                 key_mappings = {
                     "6_months": "six_months",
-                    "1_year": "one_year", 
-                    "2_years": "two_years",
                     "6_month": "six_months",
-                    "1_year": "one_year",
-                    "2_year": "two_years"
+                    "1_year": "one_year", 
+                    "1_years": "one_year",
+                    "2_years": "two_years",
+                    "2_year": "two_years",
+                    "3_years": "three_years",
+                    "3_year": "three_years",
+                    "4_years": "four_years",
+                    "4_year": "four_years",
+                    "5_years": "five_years",
+                    "5_year": "five_years",
+                    "7_years": "seven_years",
+                    "7_year": "seven_years",
+                    "8_years": "eight_years",
+                    "8_year": "eight_years",
+                    "9_years": "nine_years",
+                    "9_year": "nine_years",
+                    "10_years": "ten_years",
+                    "10_year": "ten_years",
                 }
                 
                 for old_key, new_key in key_mappings.items():
