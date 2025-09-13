@@ -145,6 +145,31 @@ class AssessmentController:
             logger.debug(f"Normalized timeline key: '{raw_k}' -> '{new_key}'")
 
         return normalized
+  
+    @staticmethod
+    def ensure_prisma_json_compatible(data):
+        """
+        Ensure data is properly formatted for Prisma JSON fields
+        Prisma expects plain JSON-serializable objects, not Json wrapper
+        """
+        import json
+        
+        if isinstance(data, (str, int, float, bool)) or data is None:
+            return data
+        
+        if hasattr(data, 'dict'):  # Pydantic models
+            return data.dict()
+        
+        if isinstance(data, dict):
+            return {k: AssessmentController.ensure_prisma_json_compatible(v) for k, v in data.items()}
+        
+        if isinstance(data, list):
+            return [AssessmentController.ensure_prisma_json_compatible(item) for item in data]
+        
+        # For any other type, convert to string as last resort
+        return str(data)
+    
+
 
     @staticmethod
     async def save_to_database(assessment_data: dict):
@@ -470,14 +495,14 @@ class AssessmentController:
                 "departement": user.department[-1] if user.department else "General",
                 "executiveSummary": str(sanitized_report.get("executive_summary", "")),
                 "geniusFactorScore": int(sanitized_report.get("genius_factor_score", 0)),
-                "geniusFactorProfileJson": fields.Json(genius_factor_json),
-                "currentRoleAlignmentAnalysisJson": fields.Json(current_role_json),
-                "internalCareerOpportunitiesJson": fields.Json(internal_career_json),
-                "retentionAndMobilityStrategiesJson": fields.Json(retention_strategies_json),
-                "developmentActionPlanJson": fields.Json(development_plan_json),
-                "personalizedResourcesJson": fields.Json(personalized_resources_json),
-                "dataSourcesAndMethodologyJson": fields.Json(data_sources_json),
-                "risk_analysis": fields.Json(risk_analysis_json),
+                "geniusFactorProfileJson": genius_factor_json,
+                "currentRoleAlignmentAnalysisJson": current_role_json,
+                "internalCareerOpportunitiesJson": internal_career_json,
+                "retentionAndMobilityStrategiesJson": retention_strategies_json,
+                "developmentActionPlanJson": development_plan_json,
+                "personalizedResourcesJson": personalized_resources_json,
+                "dataSourcesAndMethodologyJson": data_sources_json,
+                "risk_analysis": risk_analysis_json,
             }
 
             logger.info("Prepared report data for creation")
