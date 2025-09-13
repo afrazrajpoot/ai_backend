@@ -12,25 +12,6 @@ import asyncio
 class AssessmentController:
     
     @staticmethod
-    def send_to_nextjs(assessment_data: dict):
-        """
-        Send assessment data to Next.js API endpoint
-        """
-        try:
-            url = "https://geniusfactor.ai/api/generate-report"
-            headers = {"Content-Type": "application/json"}
-            
-            response = requests.post(url, json=assessment_data, headers=headers)
-            response.raise_for_status()
-
-            logger.info(f"Successfully sent data to Next.js: {response.json()}")
-            return response.json()
-            
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Error calling Next.js API: {e}")
-            return {"status": "error", "message": str(e)}
-
-    @staticmethod
     async def save_to_database(assessment_data: dict):
         """
         Save assessment data to the database using Prisma
@@ -102,7 +83,8 @@ class AssessmentController:
 
             # 3. Generate professional career recommendation report
             recommendations = await AIService.generate_career_recommendation(rag_results)
-            
+            print(f"Recommendations generated: {recommendations}")
+
             if recommendations.get("status") != "success":
                 error_msg = f"Failed to generate recommendations: {recommendations.get('message', 'Unknown error')}"
                 logger.error(error_msg)
@@ -119,7 +101,8 @@ class AssessmentController:
                 )
                 
                 raise HTTPException(status_code=500, detail="Failed to generate career recommendations")
-
+            
+            print(f"Recommendations generated")
             # Prepare final result
             final_result = {
                 "status": "success",
@@ -128,7 +111,7 @@ class AssessmentController:
                 "risk_analysis": recommendations.get("risk_analysis"),
                 "metadata": recommendations.get("metadata")
             }
-            logger.info("Assessment analysis and recommendation generation completed")
+            print(f"Assessment analysis and recommendation generation completed: {final_result}")
 
             # 4. Save data to database (synchronous call)
             db_response = await AssessmentController.save_to_database(final_result)
