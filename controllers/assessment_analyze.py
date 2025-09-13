@@ -1,135 +1,40 @@
-from schemas.assessment import AssessmentData
-from typing import Dict, Any
 from prisma import Prisma
 from utils.logger import logger
 import json, asyncpg
+from schemas.assessment import AssessmentData
+from services.ai_service import AIService
+# from services.database_notification_service import DatabaseNotificationService
+from services.db_service import DBService
+from utils.analyze_assessment import analyze_assessment_data
+from utils.logger import logger
+from services.notification_service import NotificationService
+from typing import Dict, Any
+import httpx
+from fastapi import HTTPException
+
+# Singleton AIService instance (assumed to be defined elsewhere)
+ai_service = AIService()
+
+# Singleton DatabaseNotificationService instance
+db_notification_service = DBService()
+
 
 
 class AssessmentController:
-
+    
     @staticmethod
-    async def analyze_assessment(input_data: AssessmentData) -> Dict[str, Any]:
+    async def save_to_db(input_data: AssessmentData) -> Dict[str, Any]:
         """
         Minimal version: saves hardcoded data using raw PostgreSQL (asyncpg).
         """
         logger.info("=== Starting analyze_assessment method ===")
         
-        hardcoded_data = {
-            "userId": "33b003c7-ad86-4ecf-bb54-5b2a2c633926",
-            "hrId": "42632d76-8d0d-4a59-af5c-b0172c5aaa6f",
-            "departement": "Media",
-            "executiveSummary": "This comprehensive report evaluates the Genius Factor assessment results for the employee, identifying them as a Tech Genius.",
-            "geniusFactorProfileJson": {
-                "primary_genius_factor": "Tech Genius",
-                "description": "Individuals identified as Tech Geniuses excel in systematic thinking and technical problem-solving.",
-                "key_strengths": [
-                    "Systematic Problem-Solving: Tech Geniuses can break down complex issues into manageable components.",
-                    "Analytical Thinking: Their ability to analyze data and trends enables them to make informed decisions."
-                ],
-                "secondary_genius_factor": "Tech Genius",
-                "secondary_description": "As the secondary genius factor, the Tech Genius trait reinforces the primary genius.",
-                "energy_sources": [
-                    "Engaging in complex problem-solving tasks energizes Tech Geniuses.",
-                    "Collaborating with like-minded individuals on technical projects."
-                ]
-            },
-            "currentRoleAlignmentAnalysisJson": {
-                "alignment_score": "85",
-                "assessment": "The employee's alignment score of 85 reflects a strong fit between their genius factors and their current role.",
-                "strengths_utilized": [
-                    "The employee effectively applies their systematic problem-solving skills in project management."
-                ],
-                "underutilized_talents": [
-                    "The employee's potential for leadership in technical projects is not fully realized."
-                ],
-                "retention_risk_level": "Low retention risk level due to strong alignment with role."
-            },
-            "internalCareerOpportunitiesJson": {
-                "primary_industry": "Technology",
-                "secondary_industry": "Financial Services",
-                "recommended_departments": ["Software Development", "Cybersecurity"],
-                "specific_role_suggestions": ["Software Engineer", "Cybersecurity Analyst"],
-                "career_pathways": {
-                    "Development Track": "Software Engineer → Senior Developer → Technical Lead"
-                },
-                "transition_timeline": {
-                    "six_month": "Transition into a Senior Developer role with increased responsibilities."
-                },
-                "required_skill_development": [
-                    "Advanced programming languages (Python, JavaScript)"
-                ]
-            },
-            "retentionAndMobilityStrategiesJson": {
-                "retention_strategies": [
-                    "Implement mentorship programs that pair Tech Geniuses with leadership roles."
-                ],
-                "internal_mobility_recommendations": [
-                    "Encourage participation in cross-departmental projects."
-                ],
-                "development_support": [
-                    "Allocate resources for continuous learning and professional development."
-                ]
-            },
-            "developmentActionPlanJson": {
-                "thirty_day_goals": [
-                    "Identify and enroll in a relevant online course focused on advanced programming languages."
-                ],
-                "ninety_day_goals": [
-                    "Lead a small project team to enhance leadership skills."
-                ],
-                "six_month_goals": [
-                    "Take on a technical lead role in a major project."
-                ],
-                "networking_strategy": [
-                    "Join professional associations related to technology and cybersecurity."
-                ]
-            },
-            "personalizedResourcesJson": {
-                "affirmations": [
-                    "I am a natural problem solver, capable of overcoming any technical challenge."
-                ],
-                "mindfulness_practices": [
-                    "Practice deep breathing exercises for 5 minutes daily."
-                ],
-                "reflection_questions": [
-                    "What technical challenges have I successfully overcome in the past month?"
-                ],
-                "learning_resources": [
-                    "Online courses in advanced programming languages."
-                ]
-            },
-            "dataSourcesAndMethodologyJson": {
-                "data_sources": [
-                    "Genius Factor Assessment for Fortune 1000 HR Departments.pdf"
-                ],
-                "methodology": "The analysis was conducted using a comprehensive framework."
-            },
-            "risk_analysis": {
-                "scores": {
-                    "genius_factor_score": 90,
-                    "retention_risk_score": 20,
-                    "mobility_opportunity_score": 95
-                },
-                "trends": {
-                    "risk_factors": "Low retention risk due to strong alignment.",
-                    "mobility_trends": "Internal mobility is gaining traction.",
-                    "retention_trends": "Organizations are prioritizing employee retention."
-                },
-                "company": "Fortune 1000 Company",
-                "genius_factors": ["General Talent"],
-                "recommendations": [
-                    "Implement a mentorship program."
-                ],
-                "analysis_summary": "Comprehensive risk analysis completed."
-            },
-            "geniusFactorScore": 85
-        }
 
         conn = None
         try:
             logger.info("=== Validating JSON data ===")
             # Validate JSON data before saving
-            json_test = json.dumps(hardcoded_data)
+            json_test = json.dumps(input_data)
             logger.info(f"JSON validation passed. Data size: {len(json_test)} characters")
 
             logger.info("=== Attempting database connection ===")
@@ -211,29 +116,29 @@ class AssessmentController:
             
             # Log parameter values (truncated for readability)
             logger.info("=== Parameter values ===")
-            logger.info(f"$1 userId: {hardcoded_data['userId']}")
-            logger.info(f"$2 hrId: {hardcoded_data['hrId']}")
-            logger.info(f"$3 departement: {hardcoded_data['departement']}")
-            logger.info(f"$4 executiveSummary: {hardcoded_data['executiveSummary'][:100]}...")
-            logger.info(f"$13 geniusFactorScore: {hardcoded_data['geniusFactorScore']}")
+            logger.info(f"$1 userId: {input_data['userId']}")
+            logger.info(f"$2 hrId: {input_data['hrId']}")
+            logger.info(f"$3 departement: {input_data['departement']}")
+            logger.info(f"$4 executiveSummary: {input_data['executiveSummary'][:100]}...")
+            logger.info(f"$13 geniusFactorScore: {input_data['geniusFactorScore']}")
 
             logger.info("=== Executing INSERT query ===")
             # Execute the query
             result = await conn.fetchrow(
                 query,
-                hardcoded_data["userId"],
-                hardcoded_data["hrId"],
-                hardcoded_data["departement"],
-                hardcoded_data["executiveSummary"],
-                json.dumps(hardcoded_data["geniusFactorProfileJson"]),
-                json.dumps(hardcoded_data["currentRoleAlignmentAnalysisJson"]),
-                json.dumps(hardcoded_data["internalCareerOpportunitiesJson"]),
-                json.dumps(hardcoded_data["retentionAndMobilityStrategiesJson"]),
-                json.dumps(hardcoded_data["developmentActionPlanJson"]),
-                json.dumps(hardcoded_data["personalizedResourcesJson"]),
-                json.dumps(hardcoded_data["dataSourcesAndMethodologyJson"]),
-                json.dumps(hardcoded_data["risk_analysis"]),
-                hardcoded_data["geniusFactorScore"]
+                input_data["userId"],
+                input_data["hrId"],
+                input_data["departement"],
+                input_data["executiveSummary"],
+                json.dumps(input_data["geniusFactorProfileJson"]),
+                json.dumps(input_data["currentRoleAlignmentAnalysisJson"]),
+                json.dumps(input_data["internalCareerOpportunitiesJson"]),
+                json.dumps(input_data["retentionAndMobilityStrategiesJson"]),
+                json.dumps(input_data["developmentActionPlanJson"]),
+                json.dumps(input_data["personalizedResourcesJson"]),
+                json.dumps(input_data["dataSourcesAndMethodologyJson"]),
+                json.dumps(input_data["risk_analysis"]),
+                input_data["geniusFactorScore"]
             )
 
             if result:
@@ -285,5 +190,173 @@ class AssessmentController:
                     logger.info("✓ Database connection closed")
                 except Exception as close_error:
                     logger.error(f"❌ Error closing database connection: {str(close_error)}")
-                    
-        logger.info("=== analyze_assessment method completed ===")
+                
+
+    @staticmethod
+    async def analyze_assessment(input_data: AssessmentData) -> Dict[str, Any]:
+        """
+        Endpoint for assessment analysis with real-time notifications and Next.js integration
+        """
+        try:
+            logger.info(f"Starting assessment analysis for userId: {input_data.userId}, hrId: {input_data.hrId}")
+
+            # Validate input data for notification
+            notification_data = {
+                'employeeId': input_data.userId,
+                'hrId': input_data.hrId,
+                'employeeName': input_data.employeeName,
+                'employeeEmail': input_data.employeeEmail,
+                'message': 'Assessment analysis completed successfully!',
+                'status':'unread'
+            }
+            for key, value in notification_data.items():
+                if not isinstance(value, str) or not value.strip():
+                    logger.error(f"Invalid notification data: {key} is empty or not a string")
+                    await NotificationService.send_user_notification(
+                        input_data.userId,
+                        input_data.hrId,
+                        {
+                            'message': 'Invalid notification data',
+                            'progress': 0,
+                            'status': 'error',
+                            'error': f"Field {key} is invalid"
+                        }
+                    )
+                    raise HTTPException(status_code=400, detail=f"Invalid notification data: {key}")
+
+            # 1. Get basic assessment results
+            try:
+                basic_results = analyze_assessment_data(input_data.data)
+                logger.info("Basic analysis completed")
+            except Exception as e:
+                logger.error(f"Failed to analyze assessment data: {str(e)}")
+                await NotificationService.send_user_notification(
+                    input_data.userId,
+                    input_data.hrId,
+                    {
+                        'message': 'Basic analysis failed',
+                        'progress': 100,
+                        'status': 'error',
+                        'error': str(e)
+                    }
+                )
+                raise HTTPException(status_code=500, detail=str(e))
+
+            # 2. Enhance with document retrieval from vector store
+            try:
+                rag_results = await ai_service.analyze_majority_answers(basic_results)
+            except Exception as e:
+                logger.error(f"Failed to analyze majority answers: {str(e)}")
+                await NotificationService.send_user_notification(
+                    input_data.userId,
+                    input_data.hrId,
+                    {
+                        'message': 'Failed to perform advanced analysis',
+                        'progress': 100,
+                        'status': 'error',
+                        'error': str(e)
+                    }
+                )
+                raise HTTPException(status_code=500, detail=str(e))
+            
+            # 3. Generate professional career recommendation report
+            try:
+                recommendations = await ai_service.generate_career_recommendation(rag_results)
+            except Exception as e:
+                logger.error(f"Failed to generate recommendations: {str(e)}")
+                await NotificationService.send_user_notification(
+                    input_data.userId,
+                    input_data.hrId,
+                    {
+                        'message': 'Failed to generate recommendations',
+                        'progress': 100,
+                        'status': 'error',
+                        'error': str(e)
+                    }
+                )
+                raise HTTPException(status_code=500, detail=str(e))
+            
+            if recommendations.get("status") != "success":
+                error_msg = f"Failed to generate recommendations: {recommendations.get('message', 'Unknown error')}"
+                logger.error(error_msg)
+                
+                await NotificationService.send_user_notification(
+                    input_data.userId,
+                    input_data.hrId,
+                    {
+                        'message': 'Analysis failed',
+                        'progress': 100,
+                        'status': 'error',
+                        'error': error_msg
+                    }
+                )
+                
+                raise HTTPException(status_code=500, detail="Failed to generate career recommendations")
+
+            # Prepare final result
+            final_result = {
+                "status": "success",
+                "userId": input_data.userId,
+                "report": recommendations.get("report"),
+                "risk_analysis": recommendations.get("risk_analysis"),
+                "metadata": recommendations.get("metadata")
+            }
+
+            # 4. Send data to Next.js API (asynchronous call)
+            nextjs_response = await AssessmentController.save_to_db(final_result)
+            
+            if nextjs_response.get("status") == "error":
+                logger.warning(f"Next.js API call failed but proceeding: {nextjs_response.get('message')}")
+                # Continue even if Next.js call fails, but log the warning
+
+            # Send success notification via Socket.IO
+            await NotificationService.send_user_notification(
+                input_data.userId,
+                input_data.hrId,
+                {
+                    'message': 'Assessment analysis completed successfully!',
+                    'employeeName': input_data.employeeName,
+                    'employeeEmail': input_data.employeeEmail,
+                 
+                    'progress': 100,
+                    'status': 'unread',
+                    # 'report_id': recommendations.get("metadata", {}).get("report_id"),
+                    # 'nextjs_response': nextjs_response
+                }
+            )
+
+            # Save notification to database using DatabaseNotificationService
+            try:
+                await db_notification_service.save_notification(notification_data)
+            except Exception as e:
+                logger.error(f"Failed to save notification to database: {str(e)}")
+                await NotificationService.send_user_notification(
+                    input_data.userId,
+                    input_data.hrId,
+                    {
+                        'message': 'Failed to save notification to database',
+                        'progress': 100,
+                        'status': 'error',
+                        'error': str(e)
+                    }
+                )
+                # Continue even if database save fails, but log and notify
+
+            logger.info("Assessment analysis, report generation, and Next.js integration completed successfully")
+            return final_result
+
+        except Exception as e:
+            logger.error(f"Error in analyze_assessment: {str(e)}")
+            
+            await NotificationService.send_user_notification(
+                input_data.userId,
+                input_data.hrId,
+                {
+                    'message': 'Assessment analysis failed',
+                    'progress': 100,
+                    'status': 'error',
+                    'error': str(e)
+                }
+            )
+            
+            raise HTTPException(status_code=500, detail=str(e))
