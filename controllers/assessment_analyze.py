@@ -6,6 +6,7 @@ from utils.logger import logger
 from services.notification_service import NotificationService
 from typing import Dict, Any
 from prisma import Prisma
+from prisma import fields
 import json
 import re
 
@@ -254,6 +255,115 @@ class AssessmentController:
                 logger.error(f"❌ GraphQL validation failed: {ve}")
                 raise ve
 
+            # ========== DEEP SANITIZATION FINAL PASS (canonical) ==========
+            def graphql_safe_key(raw: str) -> str:
+                s = str(raw).strip()
+                # Replace brackets and other punctuation with underscores
+                s = re.sub(r'[^a-zA-Z0-9_ ]', '_', s)
+                # Spaces -> underscores
+                s = s.replace(' ', '_')
+                # Collapse repeats
+                s = re.sub(r'_+', '_', s)
+                s = s.strip('_')
+                # If starts with digit, map leading number sequence
+                m = re.match(r'^(\d+)(.*)$', s)
+                if m:
+                    num, rest = m.group(1), m.group(2)
+                    word = AssessmentController.number_words.get(num, f"num{num}")
+                    rest = rest.lstrip('_')
+                    s = f"{word}_{rest}" if rest else word
+                # Ensure starts with letter
+                if not re.match(r'^[A-Za-z]', s):
+                    s = f"field_{s}" if s else "field_key"
+                return s or "field_key"
+
+            def deep_sanitize(obj):
+                if isinstance(obj, dict):
+                    cleaned = {}
+                    for k, v in obj.items():
+                        new_k = graphql_safe_key(k)
+                        if new_k != k:
+                            logger.debug(f"DeepSanitize key: '{k}' -> '{new_k}'")
+                        cleaned[new_k] = deep_sanitize(v)
+                    return cleaned
+                if isinstance(obj, list):
+                    return [deep_sanitize(i) for i in obj]
+                return obj
+
+            sanitized_report = deep_sanitize(sanitized_report)
+
+            # Remap any lingering transition_timeline key after deep sanitize
+            ico = sanitized_report.get('internal_career_opportunities') or sanitized_report.get('internal_career_opportunities'.replace('-', '_'))
+            if isinstance(ico, dict):
+                if 'transition_timeline' in ico and 'progress_transition_timeline' not in ico:
+                    ico['progress_transition_timeline'] = ico.pop('transition_timeline')
+                    logger.warning("Final pass remap: transition_timeline -> progress_transition_timeline")
+                # Normalize timeline keys again robustly
+                tl = ico.get('progress_transition_timeline')
+                if isinstance(tl, dict):
+                    normalized = {}
+                    for k, v in tl.items():
+                        # unify known variants
+                        lower = k.lower()
+                        if lower in ('6_months','six_months','6_month','six_month'):
+                            nk = 'six_months'
+                        elif lower in ('1_year','one_year','1year','oneyear'):
+                            nk = 'one_year'
+                        elif lower in ('2_years','two_years','2_year','two_year'):
+                            nk = 'two_years'
+                        else:
+                            nk = graphql_safe_key(k)
+                        if nk in normalized:
+                            # avoid collision
+                            idx = 1
+                            base = nk
+                            while f"{base}_{idx}" in normalized:
+                                idx += 1
+                            nk = f"{base}_{idx}"
+                        if nk != k:
+                            logger.debug(f"Timeline key normalized: '{k}' -> '{nk}'")
+                        normalized[nk] = v
+                    ico['progress_transition_timeline'] = normalized
+                    logger.info(f"Final timeline keys: {list(normalized.keys())}")
+
+            # Log any residual bracketed keys (should be none)
+            def find_bracket_keys(obj, path='root'):
+                if isinstance(obj, dict):
+                    for k, v in obj.items():
+                        if '[' in k or ']' in k:
+                            logger.error(f"Residual bracket key at {path}: {k}")
+                        find_bracket_keys(v, f"{path}.{k}")
+                elif isinstance(obj, list):
+                    for i, it in enumerate(obj):
+                        find_bracket_keys(it, f"{path}[{i}]")
+
+            find_bracket_keys(sanitized_report)
+
+            # ---------- COERCE / VALIDATE JSON FIELD VALUES (Prisma expects pure JSON-compatible types) ----------
+            def coerce_json(value, path="root"):
+                """Ensure value is composed only of JSON-serializable primitives (dict/list/str/int/float/bool/None)."""
+                import datetime
+                import decimal
+                if isinstance(value, dict):
+                    coerced = {}
+                    for k, v in value.items():
+                        coerced[k] = coerce_json(v, f"{path}.{k}")
+                    return coerced
+                if isinstance(value, list):
+                    return [coerce_json(v, f"{path}[]") for v in value]
+                if isinstance(value, (str, int, float, bool)) or value is None:
+                    return value
+                if isinstance(value, (datetime.date, datetime.datetime)):
+                    return value.isoformat()
+                if isinstance(value, decimal.Decimal):
+                    return float(value)
+                # Fallback: stringify any unsupported type
+                logger.warning(f"Coercing non-JSON-primitive at {path}: {type(value).__name__}")
+                return str(value)
+
+            # Coerce each JSON section pre-extraction
+            sanitized_report = coerce_json(sanitized_report, 'report')
+
             # 2) If internal_career_opportunities.progress_transition_timeline exists, normalize its keys
             if isinstance(sanitized_report.get("internal_career_opportunities"), dict):
                 internal_career = sanitized_report["internal_career_opportunities"]
@@ -287,7 +397,67 @@ class AssessmentController:
             data_sources_json = sanitized_report.get("data_sources_and_methodology", {})
 
             # Sanitize risk_analysis separately (it may be outside report)
-            risk_analysis_json = AssessmentController.sanitize_json_keys(assessment_data.get("risk_analysis", {}) or {})
+            risk_analysis_raw = assessment_data.get("risk_analysis", {}) or {}
+            risk_analysis_json = coerce_json(AssessmentController.sanitize_json_keys(risk_analysis_raw), 'risk_analysis')
+
+            # Final coercion for each JSON field (safety)
+            json_sections = {
+                'geniusFactorProfileJson': genius_factor_json,
+                'currentRoleAlignmentAnalysisJson': current_role_json,
+                'internalCareerOpportunitiesJson': internal_career_json,
+                'retentionAndMobilityStrategiesJson': retention_strategies_json,
+                'developmentActionPlanJson': development_plan_json,
+                'personalizedResourcesJson': personalized_resources_json,
+                'dataSourcesAndMethodologyJson': data_sources_json,
+                'risk_analysis': risk_analysis_json,
+            }
+            for label, section in json_sections.items():
+                try:
+                    import json as _json
+                    _json.dumps(section)  # validate serializable
+                except Exception as ser_e:
+                    logger.error(f"JSON serialization failed for {label}: {ser_e}. Attempting coercion.")
+                    json_sections[label] = coerce_json(section, label)
+                else:
+                    logger.debug(f"{label} JSON-serializable OK (type={type(section).__name__})")
+
+            genius_factor_json = json_sections['geniusFactorProfileJson']
+            current_role_json = json_sections['currentRoleAlignmentAnalysisJson']
+            internal_career_json = json_sections['internalCareerOpportunitiesJson']
+            retention_strategies_json = json_sections['retentionAndMobilityStrategiesJson']
+            development_plan_json = json_sections['developmentActionPlanJson']
+            personalized_resources_json = json_sections['personalizedResourcesJson']
+            data_sources_json = json_sections['dataSourcesAndMethodologyJson']
+            risk_analysis_json = json_sections['risk_analysis']
+
+            # SECONDARY HARD COERCION: forcefully round-trip through json.dumps/loads to guarantee pristine types
+            import json as _json_final
+            def hard_json(value, label):
+                try:
+                    packed = _json_final.dumps(value, ensure_ascii=False)
+                    return _json_final.loads(packed)
+                except Exception as e:
+                    logger.error(f"Hard JSON conversion failed for {label}: {e}; coercing generically.")
+                    coerced = coerce_json(value, f"hard.{label}")
+                    return _json_final.loads(_json_final.dumps(coerced))
+
+            genius_factor_json = hard_json(genius_factor_json, 'geniusFactorProfileJson')
+            current_role_json = hard_json(current_role_json, 'currentRoleAlignmentAnalysisJson')
+            internal_career_json = hard_json(internal_career_json, 'internalCareerOpportunitiesJson')
+            retention_strategies_json = hard_json(retention_strategies_json, 'retentionAndMobilityStrategiesJson')
+            development_plan_json = hard_json(development_plan_json, 'developmentActionPlanJson')
+            personalized_resources_json = hard_json(personalized_resources_json, 'personalizedResourcesJson')
+            data_sources_json = hard_json(data_sources_json, 'dataSourcesAndMethodologyJson')
+            risk_analysis_json = hard_json(risk_analysis_json, 'risk_analysis')
+
+            # FINAL LOGGING of representative structures (sizes only to avoid clutter)
+            def structure_info(obj):
+                if isinstance(obj, dict):
+                    return { 'type': 'dict', 'keys': list(obj.keys())[:10], 'len': len(obj) }
+                if isinstance(obj, list):
+                    return { 'type': 'list', 'len': len(obj) }
+                return { 'type': type(obj).__name__ }
+            logger.info(f"JSON field summary before create: geniusFactorProfileJson={structure_info(genius_factor_json)} internalCareerOpportunitiesJson={structure_info(internal_career_json)}")
 
             # Debug output right before insert
             logger.info(f"Prepared sanitized keys for insert. Internal career transition keys: "
@@ -300,14 +470,14 @@ class AssessmentController:
                 "departement": user.department[-1] if user.department else "General",
                 "executiveSummary": str(sanitized_report.get("executive_summary", "")),
                 "geniusFactorScore": int(sanitized_report.get("genius_factor_score", 0)),
-                "geniusFactorProfileJson": genius_factor_json,
-                "currentRoleAlignmentAnalysisJson": current_role_json,
-                "internalCareerOpportunitiesJson": internal_career_json,
-                "retentionAndMobilityStrategiesJson": retention_strategies_json,
-                "developmentActionPlanJson": development_plan_json,
-                "personalizedResourcesJson": personalized_resources_json,
-                "dataSourcesAndMethodologyJson": data_sources_json,
-                "risk_analysis": risk_analysis_json,
+                "geniusFactorProfileJson": fields.Json(genius_factor_json),
+                "currentRoleAlignmentAnalysisJson": fields.Json(current_role_json),
+                "internalCareerOpportunitiesJson": fields.Json(internal_career_json),
+                "retentionAndMobilityStrategiesJson": fields.Json(retention_strategies_json),
+                "developmentActionPlanJson": fields.Json(development_plan_json),
+                "personalizedResourcesJson": fields.Json(personalized_resources_json),
+                "dataSourcesAndMethodologyJson": fields.Json(data_sources_json),
+                "risk_analysis": fields.Json(risk_analysis_json),
             }
 
             logger.info("Prepared report data for creation")
@@ -317,8 +487,18 @@ class AssessmentController:
             saved_report = await prisma.individualemployeereport.create(data=report_data)
 
             logger.info(f"Successfully saved report to database with ID: {saved_report.id}")
+
+            # Build verification payload (non-sensitive summary)
+            verification = {
+                "report_id": saved_report.id,
+                "timeline_keys": list(internal_career_json.get('progress_transition_timeline', {}).keys()) if isinstance(internal_career_json, dict) else [],
+                "has_transition_timeline": 'transition_timeline' in internal_career_json if isinstance(internal_career_json, dict) else False,
+                "genius_factor_profile_keys": list(genius_factor_json.keys())[:12] if isinstance(genius_factor_json, dict) else [],
+                "internal_career_keys": list(internal_career_json.keys())[:12] if isinstance(internal_career_json, dict) else [],
+                "risk_analysis_keys": list(risk_analysis_json.keys()) if isinstance(risk_analysis_json, dict) else [],
+            }
             await prisma.disconnect()
-            return {"status": "success", "report_id": saved_report.id}
+            return {"status": "success", **verification}
 
         except Exception as e:
             logger.error(f"Error saving to database: {str(e)}")

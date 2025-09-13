@@ -492,6 +492,18 @@ INVALID EXAMPLE (DO NOT USE):
             
             # Generate risk analysis
             risk_analysis = await cls._perform_risk_analysis(output_dict)
+
+            # Final canonicalization logging for internal_career_opportunities
+            try:
+                ico = output_dict.get('internal_career_opportunities', {})
+                if isinstance(ico, dict):
+                    timeline = ico.get('progress_transition_timeline') or ico.get('transition_timeline')
+                    if timeline and isinstance(timeline, dict):
+                        logger.info(f"Return canonicalization check - timeline keys: {list(timeline.keys())}")
+                        if 'transition_timeline' in ico:
+                            logger.warning("Return stage: unexpected 'transition_timeline' present")
+            except Exception as log_e:
+                logger.debug(f"Canonicalization logging skipped: {log_e}")
          
             return {
                 "status": "success",
