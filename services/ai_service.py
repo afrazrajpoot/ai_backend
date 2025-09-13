@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from pathlib import Path
 from typing import List, Dict, Any, TypedDict, Annotated
 import hashlib
@@ -266,7 +267,7 @@ class AIService:
 
             llm = ChatOpenAI(
                 api_key=settings.OPENAI_API_KEY,
-                model="gpt-4o-mini",
+                model="gpt-4o",
                 temperature=0.3,
                 max_tokens=3000
             )
@@ -316,10 +317,59 @@ Example structure:
             logger.debug(f"Analysis data: {analysis_result}")
 
             # Generate the report
-            chain = report_prompt | llm | parser
-            output = await chain.ainvoke({"analysis_data": analysis_result})
+            chain = report_prompt | llm
+            raw_output = await chain.ainvoke({"analysis_data": analysis_result})
             
-            # POST-PROCESSING: Fix any key naming issues
+            # PRE-PROCESSING: Fix the raw text before Pydantic parsing
+            raw_text = raw_output.content if hasattr(raw_output, 'content') else str(raw_output)
+            
+            # Fix the problematic keys in the raw JSON string
+            key_fixes = [
+                # Fix transition_timeline -> progress_transition_timeline
+                (r'"transition_timeline":', '"progress_transition_timeline":'),
+                # Fix numeric timeline keys
+                (r'"6_months":', '"six_months":'),
+                (r'"1_year":', '"one_year":'),
+                (r'"2_years":', '"two_years":'),
+                (r'"6_month":', '"six_months":'),
+                (r'"1_year":', '"one_year":'),
+                (r'"2_year":', '"two_years":'),
+                # Fix career pathway keys with spaces
+                (r'"Development Track":', '"Development_Track":'),
+                (r'"Security Track":', '"Security_Track":'),
+                (r'"AI Track":', '"AI_Track":'),
+                (r'"Data Track":', '"Data_Track":'),
+                (r'"Leadership Track":', '"Leadership_Track":'),
+                (r'"Tech Track":', '"Tech_Track":'),
+                (r'"Product Track":', '"Product_Track":'),
+            ]
+            
+            # Apply all the fixes
+            fixed_text = raw_text
+            for old_pattern, new_pattern in key_fixes:
+                if old_pattern in fixed_text:
+                    fixed_text = fixed_text.replace(old_pattern, new_pattern)
+                    logger.warning(f"Pre-processing fix applied: {old_pattern} -> {new_pattern}")
+            
+            # Now parse with Pydantic using the fixed text
+            try:
+                import json
+                # Parse as JSON first to validate
+                json_data = json.loads(fixed_text)
+                # Then create the Pydantic object from the dict
+                output = IndividualEmployeeReport.parse_obj(json_data)
+            except json.JSONDecodeError as je:
+                logger.error(f"JSON parsing failed after pre-processing: {je}")
+                # Fallback to original parsing
+                chain_with_parser = report_prompt | llm | parser
+                output = await chain_with_parser.ainvoke({"analysis_data": analysis_result})
+            except Exception as pe:
+                logger.error(f"Pydantic parsing failed: {pe}")
+                # Fallback to original parsing
+                chain_with_parser = report_prompt | llm | parser
+                output = await chain_with_parser.ainvoke({"analysis_data": analysis_result})
+            
+            # POST-PROCESSING: Additional safety checks on the parsed object
             output_dict = output.dict()
             
             # Fix internal_career_opportunities key naming
