@@ -36,41 +36,37 @@ class AssessmentController:
         Recursively sanitize JSON keys to be valid for GraphQL/Prisma
         - Convert numeric keys to word equivalents (6_months -> six_months)
         - Replace invalid characters with underscores
+        - Convert multi-word keys to snake_case
+        - Ensure keys start with a letter
         """
-
-        
-        
         if isinstance(obj, dict):
             sanitized = {}
             for key, value in obj.items():
-                str_key = str(key)
+                str_key = str(key).strip()  # Remove leading/trailing whitespace
 
                 # Handle keys starting with numbers
                 if re.match(r'^\d', str_key):
-                    # Match one or more leading digits
                     match = re.match(r'^\d+', str_key)
                     if match:
                         leading_num = match.group()
-                        # Convert number to word if possible
                         word = AssessmentController.number_words.get(leading_num, f"num{leading_num}")
                         str_key = str_key.replace(leading_num, word, 1)
                         logger.debug(f"Converted numeric key: '{key}' -> '{str_key}' (replaced '{leading_num}' with '{word}')")
 
-                # Replace invalid characters with underscore
-                sanitized_key = re.sub(r'[^a-zA-Z0-9_]', '_', str_key)
+                # Replace spaces and invalid characters with underscores, convert to snake_case
+                sanitized_key = re.sub(r'[^a-zA-Z0-9]+', '_', str_key).lower()
+                sanitized_key = re.sub(r'_+', '_', sanitized_key)  # Remove multiple underscores
 
                 # Ensure key starts with a letter (GraphQL requirement)
                 if sanitized_key and not re.match(r'^[a-zA-Z]', sanitized_key):
                     if re.match(r'^\d', sanitized_key):
-                        # If it still starts with a number, prefix with 'key_'
                         sanitized_key = 'key_' + sanitized_key
                     elif sanitized_key.startswith('_'):
-                        # If it starts with underscore, prefix with 'field'
                         sanitized_key = 'field' + sanitized_key
 
                 # Log transformation for debugging
                 if sanitized_key != key:
-                    logger.debug(f"Sanitized key: {key} -> {sanitized_key}")
+                    logger.debug(f"Sanitized key: '{key}' -> '{sanitized_key}'")
 
                 # Recurse
                 sanitized[sanitized_key] = AssessmentController.sanitize_json_keys(value)
