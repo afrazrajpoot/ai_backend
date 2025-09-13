@@ -152,8 +152,8 @@ class AssessmentController:
             
             raise HTTPException(status_code=500, detail=str(e))
 
-    @staticmethod
-    async def get_career_recommendations(analysis_data: Dict[str, Any]) -> Dict[str, Any]:
+    # @staticmethod
+    # async def get_career_recommendations(analysis_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Endpoint for generating professional career recommendation report
         """
