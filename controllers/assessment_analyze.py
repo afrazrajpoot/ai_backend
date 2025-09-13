@@ -36,43 +36,58 @@ class AssessmentController:
         Save assessment data to the database using Prisma
         """
         try:
+            logger.info("Starting database save process for assessment data")
             db = await DBService._get_db()
+            logger.info("Database connection established")
             
             # Extract report data
             report = assessment_data.get("report", {})
+            logger.info(f"Extracted report data: {bool(report)}")
             
             # Get user details for hrId and department
+            user_id = assessment_data["userId"]
+            logger.info(f"Looking up user with ID: {user_id}")
             user = await db.user.find_unique(
-                where={"id": assessment_data["userId"]}
+                where={"id": user_id}
             )
             
             if not user:
+                logger.error(f"User not found with ID: {user_id}")
                 raise ValueError("User not found")
             
+            logger.info(f"User found: {user.id}, hrId: {user.hrId}, department: {user.department}")
+            
+            # Prepare data for report creation
+            report_data = {
+                "userId": user_id,
+                "hrId": user.hrId,
+                "departement": user.department[-1] if user.department else "General",
+                "executiveSummary": report.get("executive_summary", ""),
+                "geniusFactorProfileJson": report.get("genius_factor_profile", {}),
+                "currentRoleAlignmentAnalysisJson": report.get("current_role_alignment_analysis", {}),
+                "internalCareerOpportunitiesJson": report.get("internal_career_opportunities", {}),
+                "retentionAndMobilityStrategiesJson": report.get("retention_and_mobility_strategies", {}),
+                "developmentActionPlanJson": report.get("development_action_plan", {}),
+                "personalizedResourcesJson": report.get("personalized_resources", {}),
+                "dataSourcesAndMethodologyJson": report.get("data_sources_and_methodology", {}),
+                "geniusFactorScore": report.get("genius_factor_score", 0),
+                "risk_analysis": assessment_data.get("risk_analysis", {})
+            }
+            
+            logger.info("Prepared report data for creation")
+            
             # Create the report
+            logger.info("Creating individual employee report in database...")
             saved_report = await db.individualemployeereport.create(
-                data={
-                    "userId": assessment_data["userId"],
-                    "hrId": user.hrId,
-                    "departement": user.department[-1] if user.department else "General",
-                    "executiveSummary": report.get("executive_summary", ""),
-                    "geniusFactorProfileJson": report.get("genius_factor_profile", {}),
-                    "currentRoleAlignmentAnalysisJson": report.get("current_role_alignment_analysis", {}),
-                    "internalCareerOpportunitiesJson": report.get("internal_career_opportunities", {}),
-                    "retentionAndMobilityStrategiesJson": report.get("retention_and_mobility_strategies", {}),
-                    "developmentActionPlanJson": report.get("development_action_plan", {}),
-                    "personalizedResourcesJson": report.get("personalized_resources", {}),
-                    "dataSourcesAndMethodologyJson": report.get("data_sources_and_methodology", {}),
-                    "geniusFactorScore": report.get("genius_factor_score", 0),
-                    "risk_analysis": assessment_data.get("risk_analysis", {})
-                }
+                data=report_data
             )
             
-            logger.info(f"Successfully saved report to database: {saved_report.id}")
+            logger.info(f"Successfully saved report to database with ID: {saved_report.id}")
             return {"status": "success", "report_id": saved_report.id}
             
         except Exception as e:
             logger.error(f"Error saving to database: {str(e)}")
+            logger.error(f"Full exception details: {type(e).__name__}: {e}")
             return {"status": "error", "message": str(e)}
     
     @staticmethod
@@ -82,42 +97,8 @@ class AssessmentController:
         """
         try:
             logger.info("Starting assessment analysis")
-
-            # Send progress notification via Socket.IO
-            # await NotificationService.send_user_notification(
-            #     input_data.userId,
-            #     {
-            #         'message': 'Assessment analysis started',
-            #         'progress': 0,
-            #         'status': 'processing'
-            #     }
-            # )
-
-            # 1. Get basic assessment results
             basic_results = analyze_assessment_data(input_data.data)
-            # print(basic_results,'basic result')
-            # Send progress update
-            # await NotificationService.send_user_notification(
-            #     input_data.userId,
-            #     {
-            #         'message': 'Basic analysis completed',
-            #         'progress': 33,
-            #         'status': 'processing'
-            #     }
-            # )
-
-            # 2. Enhance with document retrieval from vector store
             rag_results = await AIService.analyze_majority_answers(basic_results)
-            
-            # Send progress update
-            # await NotificationService.send_user_notification(
-            #     input_data.userId,
-            #     {
-            #         'message': 'Advanced analysis completed',
-            #         'progress': 66,
-            #         'status': 'processing'
-            #     }
-            # )
 
             # 3. Generate professional career recommendation report
             recommendations = await AIService.generate_career_recommendation(rag_results)
@@ -147,6 +128,7 @@ class AssessmentController:
                 "risk_analysis": recommendations.get("risk_analysis"),
                 "metadata": recommendations.get("metadata")
             }
+            logger.info("Assessment analysis and recommendation generation completed")
 
             # 4. Save data to database (synchronous call)
             db_response = await AssessmentController.save_to_database(final_result)
