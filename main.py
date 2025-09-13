@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from routes.assessment import router as assessment_router
 from routes.employee_dashboard import router as dashboard_router
 from routes.assessment_analyze import router as assessment_analyze_router
+from routes.test_db import router as test_db_router
 from config import settings
 from utils.logger import logger
 
@@ -25,7 +26,7 @@ app.add_middleware(
         "https://geniusfactor.ai",
         "https://www.geniusfactor.ai",
         "https://api.geniusfactor.ai",
-        "http://localhost:3000",
+        "https://geniusfactor.ai",
         "http://127.0.0.1:3000",
         "http://localhost:8000",
         "http://127.0.0.1:8000",
@@ -40,6 +41,7 @@ app.add_middleware(
 app.include_router(assessment_router)
 app.include_router(dashboard_router)
 app.include_router(assessment_analyze_router)
+app.include_router(test_db_router, prefix="/test", tags=["testing"])
 
 app.include_router(job_router)
 app.include_router(employee_router)
