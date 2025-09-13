@@ -4,25 +4,53 @@ from services.ai_service import AIService
 from utils.analyze_assessment import analyze_assessment_data
 from utils.logger import logger
 from services.notification_service import NotificationService
-from typing import Dict, Any
+from typing import Dict, Any, Union
 from prisma import Prisma
-
+import json
 
 
 class AssessmentController:
     
     @staticmethod
+    def sanitize_and_validate_json(obj: Any) -> Union[Dict, List, None]:
+        """
+        Sanitize keys and validate JSON data for Prisma
+        """
+        def sanitize_keys(data):
+            if isinstance(data, dict):
+                # Handle empty dict
+                if not data:
+                    return {}
+                return {str(k).replace("[", "_").replace("]", "_"): sanitize_keys(v) for k, v in data.items()}
+            elif isinstance(data, list):
+                return [sanitize_keys(i) for i in data]
+            elif data is None:
+                return None
+            else:
+                return data
+
+        try:
+            sanitized = sanitize_keys(obj)
+            
+            # Validate that the result is JSON serializable
+            json.dumps(sanitized)
+            
+            # Return None for empty objects to use JsonNullValueInput
+            if sanitized == {} or sanitized is None:
+                return None
+                
+            return sanitized
+            
+        except (TypeError, ValueError) as e:
+            logger.error(f"JSON serialization error: {e}")
+            logger.error(f"Problematic data: {obj}")
+            return None
+
+    @staticmethod
     async def save_to_database(assessment_data: dict):
         """
         Save assessment data to the database using Prisma
         """
-        def sanitize_keys(obj):
-            if isinstance(obj, dict):
-                return {str(k).replace("[", "_").replace("]", "_"): sanitize_keys(v) for k, v in obj.items()}
-            elif isinstance(obj, list):
-                return [sanitize_keys(i) for i in obj]
-            return obj
-
         prisma = Prisma()
         await prisma.connect()
 
@@ -47,24 +75,64 @@ class AssessmentController:
             
             logger.info(f"User found: {user.id}, hrId: {user.hrId}, department: {user.department}")
             
+            # Process JSON fields with proper validation
+            genius_factor_profile = AssessmentController.sanitize_and_validate_json(
+                report.get("genius_factor_profile", {})
+            )
+            current_role_alignment = AssessmentController.sanitize_and_validate_json(
+                report.get("current_role_alignment_analysis", {})
+            )
+            internal_career_opportunities = AssessmentController.sanitize_and_validate_json(
+                report.get("internal_career_opportunities", {})
+            )
+            retention_strategies = AssessmentController.sanitize_and_validate_json(
+                report.get("retention_and_mobility_strategies", {})
+            )
+            development_action_plan = AssessmentController.sanitize_and_validate_json(
+                report.get("development_action_plan", {})
+            )
+            personalized_resources = AssessmentController.sanitize_and_validate_json(
+                report.get("personalized_resources", {})
+            )
+            data_sources_methodology = AssessmentController.sanitize_and_validate_json(
+                report.get("data_sources_and_methodology", {})
+            )
+            risk_analysis = AssessmentController.sanitize_and_validate_json(
+                assessment_data.get("risk_analysis", {})
+            )
+            
+            # Log the processed data for debugging
+            logger.info(f"Genius factor profile type: {type(genius_factor_profile)}")
+            logger.info(f"Genius factor profile content: {genius_factor_profile}")
+            
             # Prepare data for report creation
             report_data = {
                 "userId": user_id,
                 "hrId": user.hrId,
                 "departement": user.department[-1] if user.department else "General",
                 "executiveSummary": report.get("executive_summary", ""),
-                "geniusFactorProfileJson": sanitize_keys(report.get("genius_factor_profile", {})),
-                "currentRoleAlignmentAnalysisJson": sanitize_keys(report.get("current_role_alignment_analysis", {})),
-                "internalCareerOpportunitiesJson": sanitize_keys(report.get("internal_career_opportunities", {})),
-                "retentionAndMobilityStrategiesJson": sanitize_keys(report.get("retention_and_mobility_strategies", {})),
-                "developmentActionPlanJson": sanitize_keys(report.get("development_action_plan", {})),
-                "personalizedResourcesJson": sanitize_keys(report.get("personalized_resources", {})),
-                "dataSourcesAndMethodologyJson": sanitize_keys(report.get("data_sources_and_methodology", {})),
-                "geniusFactorScore": report.get("genius_factor_score", 0),
-                "risk_analysis": sanitize_keys(assessment_data.get("risk_analysis", {})),
+                "geniusFactorScore": int(report.get("genius_factor_score", 0)),
+                "risk_analysis": risk_analysis,
             }
+            
+            # Only add JSON fields if they're not None
+            if genius_factor_profile is not None:
+                report_data["geniusFactorProfileJson"] = genius_factor_profile
+            if current_role_alignment is not None:
+                report_data["currentRoleAlignmentAnalysisJson"] = current_role_alignment
+            if internal_career_opportunities is not None:
+                report_data["internalCareerOpportunitiesJson"] = internal_career_opportunities
+            if retention_strategies is not None:
+                report_data["retentionAndMobilityStrategiesJson"] = retention_strategies
+            if development_action_plan is not None:
+                report_data["developmentActionPlanJson"] = development_action_plan
+            if personalized_resources is not None:
+                report_data["personalizedResourcesJson"] = personalized_resources
+            if data_sources_methodology is not None:
+                report_data["dataSourcesAndMethodologyJson"] = data_sources_methodology
 
             logger.info("Prepared report data for creation")
+            logger.info(f"Report data keys: {list(report_data.keys())}")
             
             # Create the report
             logger.info("Creating individual employee report in database...")
@@ -164,4 +232,3 @@ class AssessmentController:
             )
             
             raise HTTPException(status_code=500, detail=str(e))
-
