@@ -13,13 +13,19 @@ class AssessmentController:
     
     @staticmethod
     async def save_to_database(assessment_data: dict):
+        """
+        Save assessment data to the database using Prisma
+        """
+        def sanitize_keys(obj):
+            if isinstance(obj, dict):
+                return {str(k).replace("[", "_").replace("]", "_"): sanitize_keys(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [sanitize_keys(i) for i in obj]
+            return obj
 
         prisma = Prisma()
         await prisma.connect()
 
-        """
-        Save assessment data to the database using Prisma
-        """
         try:
             logger.info("Starting database save process for assessment data")
             logger.info("Database connection established")
@@ -47,17 +53,17 @@ class AssessmentController:
                 "hrId": user.hrId,
                 "departement": user.department[-1] if user.department else "General",
                 "executiveSummary": report.get("executive_summary", ""),
-                "geniusFactorProfileJson": report.get("genius_factor_profile", {}),
-                "currentRoleAlignmentAnalysisJson": report.get("current_role_alignment_analysis", {}),
-                "internalCareerOpportunitiesJson": report.get("internal_career_opportunities", {}),
-                "retentionAndMobilityStrategiesJson": report.get("retention_and_mobility_strategies", {}),
-                "developmentActionPlanJson": report.get("development_action_plan", {}),
-                "personalizedResourcesJson": report.get("personalized_resources", {}),
-                "dataSourcesAndMethodologyJson": report.get("data_sources_and_methodology", {}),
+                "geniusFactorProfileJson": sanitize_keys(report.get("genius_factor_profile", {})),
+                "currentRoleAlignmentAnalysisJson": sanitize_keys(report.get("current_role_alignment_analysis", {})),
+                "internalCareerOpportunitiesJson": sanitize_keys(report.get("internal_career_opportunities", {})),
+                "retentionAndMobilityStrategiesJson": sanitize_keys(report.get("retention_and_mobility_strategies", {})),
+                "developmentActionPlanJson": sanitize_keys(report.get("development_action_plan", {})),
+                "personalizedResourcesJson": sanitize_keys(report.get("personalized_resources", {})),
+                "dataSourcesAndMethodologyJson": sanitize_keys(report.get("data_sources_and_methodology", {})),
                 "geniusFactorScore": report.get("genius_factor_score", 0),
-                "risk_analysis": assessment_data.get("risk_analysis", {})
+                "risk_analysis": sanitize_keys(assessment_data.get("risk_analysis", {})),
             }
-            
+
             logger.info("Prepared report data for creation")
             
             # Create the report
@@ -67,14 +73,16 @@ class AssessmentController:
             )
             
             logger.info(f"Successfully saved report to database with ID: {saved_report.id}")
-            prisma.disconnect()
+            await prisma.disconnect()
             return {"status": "success", "report_id": saved_report.id}
-
             
         except Exception as e:
             logger.error(f"Error saving to database: {str(e)}")
             logger.error(f"Full exception details: {type(e).__name__}: {e}")
+            await prisma.disconnect()
             return {"status": "error", "message": str(e)}
+
+        
     
     @staticmethod
     async def analyze_assessment(input_data: AssessmentData) -> Dict[str, Any]:
