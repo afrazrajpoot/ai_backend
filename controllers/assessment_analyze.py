@@ -2,8 +2,7 @@ from schemas.assessment import AssessmentData
 from typing import Dict, Any
 from prisma import Prisma
 from utils.logger import logger
-import json
-import asyncpg
+import json, asyncpg
 
 
 class AssessmentController:
