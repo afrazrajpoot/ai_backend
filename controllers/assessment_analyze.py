@@ -193,11 +193,19 @@ class AssessmentController:
                     "personalizedResourcesJson",
                     "dataSourcesAndMethodologyJson",
                     "risk_analysis",
-                    "geniusFactorScore"
+                    "geniusFactorScore",
+                    "createdAt",
+                    "updatedAt"
                 )
-                VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb, $11::jsonb, $12::jsonb, $13)
-                RETURNING id, "createdAt"
+                VALUES (
+                    $1, $2, $3, $4, 
+                    $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, 
+                    $9::jsonb, $10::jsonb, $11::jsonb, $12::jsonb, 
+                    $13, NOW(), NOW()
+                )
+                RETURNING id, "createdAt", "updatedAt"
             """
+
             
             logger.info("Query prepared successfully")
             
