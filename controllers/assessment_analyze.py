@@ -36,33 +36,40 @@ class AssessmentController:
         Recursively sanitize JSON keys to be valid for GraphQL/Prisma
         - Convert numeric keys to word equivalents (6_months -> six_months)
         - Replace invalid characters with underscores
-        - Convert multi-word keys to snake_case
-        - Ensure keys start with a letter
+        - Handle square brackets and special characters
         """
         if isinstance(obj, dict):
             sanitized = {}
             for key, value in obj.items():
-                str_key = str(key).strip()  # Remove leading/trailing whitespace
+                str_key = str(key)
 
                 # Handle keys starting with numbers
                 if re.match(r'^\d', str_key):
+                    # Match one or more leading digits
                     match = re.match(r'^\d+', str_key)
                     if match:
                         leading_num = match.group()
+                        # Convert number to word if possible
                         word = AssessmentController.number_words.get(leading_num, f"num{leading_num}")
                         str_key = str_key.replace(leading_num, word, 1)
                         logger.debug(f"Converted numeric key: '{key}' -> '{str_key}' (replaced '{leading_num}' with '{word}')")
 
-                # Replace spaces and invalid characters with underscores, convert to snake_case
-                sanitized_key = re.sub(r'[^a-zA-Z0-9]+', '_', str_key).lower()
-                sanitized_key = re.sub(r'_+', '_', sanitized_key)  # Remove multiple underscores
+                # Replace ALL invalid characters with underscore (including square brackets, spaces, etc.)
+                sanitized_key = re.sub(r'[^a-zA-Z0-9_]', '_', str_key)
+                
+                # Remove consecutive underscores
+                sanitized_key = re.sub(r'_+', '_', sanitized_key)
+                
+                # Remove leading/trailing underscores
+                sanitized_key = sanitized_key.strip('_')
 
                 # Ensure key starts with a letter (GraphQL requirement)
                 if sanitized_key and not re.match(r'^[a-zA-Z]', sanitized_key):
-                    if re.match(r'^\d', sanitized_key):
-                        sanitized_key = 'key_' + sanitized_key
-                    elif sanitized_key.startswith('_'):
-                        sanitized_key = 'field' + sanitized_key
+                    sanitized_key = 'field_' + sanitized_key
+
+                # Ensure key is not empty
+                if not sanitized_key:
+                    sanitized_key = f'field_{hash(str(key)) % 1000}'
 
                 # Log transformation for debugging
                 if sanitized_key != key:
@@ -106,29 +113,30 @@ class AssessmentController:
             
             logger.info(f"User found: {user.id}, hrId: {user.hrId}, department: {user.department}")
             
-            # Process JSON fields with proper Prisma formatting
-            def process_json_field(data):
+            # Process JSON fields with proper Prisma formatting and detailed logging
+            def process_json_field(data, field_name):
                 if not data:
+                    logger.debug(f"{field_name}: Empty data, returning empty dict")
                     return {}  # Return empty dict for Prisma
                 try:
-                    logger.debug(f"Processing JSON field with keys: {list(data.keys())[:5]}...")  # Log first 5 keys
+                    logger.debug(f"{field_name}: Processing with keys: {list(data.keys()) if isinstance(data, dict) else 'Not a dict'}")
                     # First sanitize the keys
                     sanitized = AssessmentController.sanitize_json_keys(data)
-                    logger.debug(f"Sanitized JSON field with keys: {list(sanitized.keys())[:5]}...")  # Log first 5 sanitized keys
+                    logger.debug(f"{field_name}: Sanitized successfully with keys: {list(sanitized.keys()) if isinstance(sanitized, dict) else 'Not a dict'}")
                     # Return as dict for Prisma (not JSON string)
                     return sanitized
                 except (TypeError, ValueError) as e:
-                    logger.error(f"JSON processing failed: {e}")
+                    logger.error(f"{field_name}: JSON processing failed: {e}")
                     return {}
             
-            genius_factor_json = process_json_field(report.get("genius_factor_profile", {}))
-            current_role_json = process_json_field(report.get("current_role_alignment_analysis", {}))
-            internal_career_json = process_json_field(report.get("internal_career_opportunities", {}))
-            retention_strategies_json = process_json_field(report.get("retention_and_mobility_strategies", {}))
-            development_plan_json = process_json_field(report.get("development_action_plan", {}))
-            personalized_resources_json = process_json_field(report.get("personalized_resources", {}))
-            data_sources_json = process_json_field(report.get("data_sources_and_methodology", {}))
-            risk_analysis_json = process_json_field(assessment_data.get("risk_analysis", {}))
+            genius_factor_json = process_json_field(report.get("genius_factor_profile", {}), "genius_factor_profile")
+            current_role_json = process_json_field(report.get("current_role_alignment_analysis", {}), "current_role_alignment_analysis")
+            internal_career_json = process_json_field(report.get("internal_career_opportunities", {}), "internal_career_opportunities")
+            retention_strategies_json = process_json_field(report.get("retention_and_mobility_strategies", {}), "retention_and_mobility_strategies")
+            development_plan_json = process_json_field(report.get("development_action_plan", {}), "development_action_plan")
+            personalized_resources_json = process_json_field(report.get("personalized_resources", {}), "personalized_resources")
+            data_sources_json = process_json_field(report.get("data_sources_and_methodology", {}), "data_sources_and_methodology")
+            risk_analysis_json = process_json_field(assessment_data.get("risk_analysis", {}), "risk_analysis")
             
             # Log the problematic field for debugging
             logger.info(f"Internal career opportunities keys: {list(internal_career_json.get('transition_timeline', {}).keys()) if 'transition_timeline' in internal_career_json else 'No transition_timeline'}")
