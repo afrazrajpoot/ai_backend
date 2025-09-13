@@ -7,10 +7,68 @@ from services.notification_service import NotificationService
 from typing import Dict, Any
 from prisma import Prisma
 import json
+import re
 
 
 class AssessmentController:
+
+    number_words = {
+        "0": "zero",
+        "1": "one",
+        "2": "two",
+        "3": "three",
+        "4": "four",
+        "5": "five",
+        "6": "six",
+        "7": "seven",
+        "8": "eight",
+        "9": "nine",
+        "10": "ten",
+        "30": "thirty",
+        "60": "sixty",
+        "90": "ninety",
+    }
+
     
+    @staticmethod
+    def sanitize_json_keys(obj):
+        """
+        Recursively sanitize JSON keys to be valid for GraphQL/Prisma
+        - Convert numeric keys to word equivalents (6_months -> six_months)
+        - Replace invalid characters with underscores
+        """
+
+        
+        
+        if isinstance(obj, dict):
+            sanitized = {}
+            for key, value in obj.items():
+                str_key = str(key)
+
+                # Handle keys starting with numbers
+                if re.match(r'^\d', str_key):
+                    # Match one or more leading digits
+                    leading_num = re.match(r'^\d+', str_key).group()
+                    # Convert number to word if possible
+                    word = AssessmentController.number_words.get(leading_num, f"num{leading_num}")
+                    str_key = str_key.replace(leading_num, word, 1)
+
+                # Replace invalid characters with underscore
+                sanitized_key = re.sub(r'[^a-zA-Z0-9_]', '_', str_key)
+
+                # Log transformation for debugging
+                if sanitized_key != key:
+                    logger.debug(f"Sanitized key: {key} -> {sanitized_key}")
+
+                # Recurse
+                sanitized[sanitized_key] = AssessmentController.sanitize_json_keys(value)
+            return sanitized
+
+        elif isinstance(obj, list):
+            return [AssessmentController.sanitize_json_keys(item) for item in obj]
+        else:
+            return obj
+
     @staticmethod
     async def save_to_database(assessment_data: dict):
         """
@@ -40,62 +98,31 @@ class AssessmentController:
             
             logger.info(f"User found: {user.id}, hrId: {user.hrId}, department: {user.department}")
             
-            # DEBUGGING: Log the raw data types and content
-            genius_factor_raw = report.get("genius_factor_profile", {})
-            logger.info(f"Raw genius_factor_profile type: {type(genius_factor_raw)}")
-            logger.info(f"Raw genius_factor_profile content: {genius_factor_raw}")
+            # Process JSON fields with key sanitization
+            def process_json_field(data):
+                if not data:
+                    return {}
+                try:
+                    # First sanitize the keys
+                    sanitized = AssessmentController.sanitize_json_keys(data)
+                    # Then test JSON serialization
+                    json.dumps(sanitized)
+                    return sanitized
+                except (TypeError, ValueError) as e:
+                    logger.error(f"JSON processing failed: {e}")
+                    return {}
             
-            # Direct JSON processing - NO sanitize_keys function
-            # Just ensure the data is JSON serializable
-            try:
-                genius_factor_json = json.loads(json.dumps(genius_factor_raw)) if genius_factor_raw else {}
-                logger.info(f"Processed genius_factor_profile: {type(genius_factor_json)}")
-                logger.info(f"JSON test passed for genius_factor_profile")
-            except (TypeError, ValueError) as e:
-                logger.error(f"JSON processing failed for genius_factor_profile: {e}")
-                genius_factor_json = {}
+            genius_factor_json = process_json_field(report.get("genius_factor_profile", {}))
+            current_role_json = process_json_field(report.get("current_role_alignment_analysis", {}))
+            internal_career_json = process_json_field(report.get("internal_career_opportunities", {}))
+            retention_strategies_json = process_json_field(report.get("retention_and_mobility_strategies", {}))
+            development_plan_json = process_json_field(report.get("development_action_plan", {}))
+            personalized_resources_json = process_json_field(report.get("personalized_resources", {}))
+            data_sources_json = process_json_field(report.get("data_sources_and_methodology", {}))
+            risk_analysis_json = process_json_field(assessment_data.get("risk_analysis", {}))
             
-            try:
-                current_role_json = json.loads(json.dumps(report.get("current_role_alignment_analysis", {})))
-            except (TypeError, ValueError) as e:
-                logger.error(f"JSON processing failed for current_role_alignment_analysis: {e}")
-                current_role_json = {}
-                
-            try:
-                internal_career_json = json.loads(json.dumps(report.get("internal_career_opportunities", {})))
-            except (TypeError, ValueError) as e:
-                logger.error(f"JSON processing failed for internal_career_opportunities: {e}")
-                internal_career_json = {}
-                
-            try:
-                retention_strategies_json = json.loads(json.dumps(report.get("retention_and_mobility_strategies", {})))
-            except (TypeError, ValueError) as e:
-                logger.error(f"JSON processing failed for retention_and_mobility_strategies: {e}")
-                retention_strategies_json = {}
-                
-            try:
-                development_plan_json = json.loads(json.dumps(report.get("development_action_plan", {})))
-            except (TypeError, ValueError) as e:
-                logger.error(f"JSON processing failed for development_action_plan: {e}")
-                development_plan_json = {}
-                
-            try:
-                personalized_resources_json = json.loads(json.dumps(report.get("personalized_resources", {})))
-            except (TypeError, ValueError) as e:
-                logger.error(f"JSON processing failed for personalized_resources: {e}")
-                personalized_resources_json = {}
-                
-            try:
-                data_sources_json = json.loads(json.dumps(report.get("data_sources_and_methodology", {})))
-            except (TypeError, ValueError) as e:
-                logger.error(f"JSON processing failed for data_sources_and_methodology: {e}")
-                data_sources_json = {}
-                
-            try:
-                risk_analysis_json = json.loads(json.dumps(assessment_data.get("risk_analysis", {})))
-            except (TypeError, ValueError) as e:
-                logger.error(f"JSON processing failed for risk_analysis: {e}")
-                risk_analysis_json = {}
+            # Log the problematic field for debugging
+            logger.info(f"Internal career opportunities keys: {list(internal_career_json.get('transition_timeline', {}).keys()) if 'transition_timeline' in internal_career_json else 'No transition_timeline'}")
             
             # Prepare data for report creation
             report_data = {
@@ -115,12 +142,6 @@ class AssessmentController:
             }
 
             logger.info("Prepared report data for creation")
-            logger.info(f"Report data keys: {list(report_data.keys())}")
-            
-            # DEBUGGING: Log each JSON field type
-            for key, value in report_data.items():
-                if "Json" in key or key == "risk_analysis":
-                    logger.info(f"{key} type: {type(value)}, empty: {not bool(value)}")
             
             # Create the report
             logger.info("Creating individual employee report in database...")
