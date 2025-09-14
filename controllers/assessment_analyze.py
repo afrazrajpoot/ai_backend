@@ -131,16 +131,16 @@ class AssessmentController:
                 input_data["userId"],
                 input_data["hrId"],
                 input_data["departement"],
-                input_data["report"]["executiveSummary"],
-                json.dumps(input_data["report"]["geniusFactorProfileJson"]),
-                json.dumps(input_data["report"]["currentRoleAlignmentAnalysisJson"]),
-                json.dumps(input_data["report"]["internalCareerOpportunitiesJson"]),
-                json.dumps(input_data["report"]["retentionAndMobilityStrategiesJson"]),
-                json.dumps(input_data["report"]["developmentActionPlanJson"]),
-                json.dumps(input_data["report"]["personalizedResourcesJson"]),
-                json.dumps(input_data["report"]["dataSourcesAndMethodologyJson"]),
+                input_data["report"]["executive_summary"],
+                json.dumps(input_data["report"]["genius_factor_profile"]),
+                json.dumps(input_data["report"]["current_role_alignment_analysis"]),
+                json.dumps(input_data["report"]["internal_career_opportunities"]),
+                json.dumps(input_data["report"]["retention_and_mobility_strategies"]),
+                json.dumps(input_data["report"]["development_action_plan"]),
+                json.dumps(input_data["report"]["personalized_resources"]),
+                json.dumps(input_data["report"]["data_sources_and_methodology"]),
                 json.dumps(input_data["risk_analysis"]),
-                input_data["report"]["geniusFactorScore"]
+                input_data["report"]["genius_factor_score"]
             )
 
             if result:
