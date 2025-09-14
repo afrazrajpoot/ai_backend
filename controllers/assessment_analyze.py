@@ -174,7 +174,7 @@ class AssessmentController:
             logger.error(f"Error detail: {getattr(db_error, 'detail', 'No detail available')}")
             return {"status": "error", "message": f"Database error: {str(db_error)}"}
 
-        except json.JSONEncodeError as json_error:
+        except (TypeError, ValueError) as json_error:
             logger.error(f"❌ JSON encoding error: {str(json_error)}")
             return {"status": "error", "message": f"JSON encoding error: {str(json_error)}"}
 
