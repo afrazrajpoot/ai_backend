@@ -1,7 +1,7 @@
 from prisma import Prisma
 from utils.logger import logger
 import json, asyncpg
-from schemas.assessment import AssessmentData
+from schemas.assessment import AssessmentData, AssessmentPart
 from services.ai_service import AIService
 # from services.database_notification_service import DatabaseNotificationService
 from services.db_service import DBService
@@ -245,7 +245,9 @@ class AssessmentController:
 
             # 1. Get basic assessment results
             try:
-                basic_results = analyze_assessment_data(input_data['data'])
+                # Convert dict data back to AssessmentPart objects
+                assessment_parts = [AssessmentPart(**part) for part in input_data['data']]
+                basic_results = analyze_assessment_data(assessment_parts)
                 logger.info("Basic analysis completed")
             except Exception as e:
                 logger.error(f"Failed to analyze assessment data: {str(e)}")
