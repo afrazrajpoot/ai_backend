@@ -296,6 +296,7 @@ class AssessmentController:
             # Prepare final result
             final_result = {
                 "status": "success",
+                "hrId": input_data.hrId,
                 "userId": input_data.userId,
                 "report": recommendations.get("report"),
                 "risk_analysis": recommendations.get("risk_analysis"),
