@@ -330,18 +330,16 @@ class AssessmentController:
 
             # Send success notification via Socket.IO
             await NotificationService.send_user_notification(
-                input_data['userId'],
-                {
-                    'message': 'Assessment analysis completed successfully!',
-                    'employeeName': input_data['employeeName'],
-                    'employeeEmail': input_data['employeeEmail'],
-                 
-                    'progress': 100,
-                    'status': 'unread',
-                    # 'report_id': recommendations.get("metadata", {}).get("report_id"),
-                    # 'nextjs_response': nextjs_response
-                }
-            )
+            input_data['userId'],
+            hr_id=input_data['hrId'],
+            data={
+                'message': 'Assessment analysis completed successfully!',
+                'employeeName': input_data['employeeName'],
+                'employeeEmail': input_data['employeeEmail'],
+                'progress': 100,
+                'status': 'unread',
+            }
+        )
 
             # Save notification to database using DatabaseNotificationService
             try:
@@ -350,7 +348,8 @@ class AssessmentController:
                 logger.error(f"Failed to save notification to database: {str(e)}")
                 await NotificationService.send_user_notification(
                     input_data['userId'],
-                    {
+                    hr_id=input_data['hrId'],
+                    data={
                         'message': 'Failed to save notification to database',
                         'progress': 100,
                         'status': 'error',
