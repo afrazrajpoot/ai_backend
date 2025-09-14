@@ -35,6 +35,8 @@ class AssessmentController:
             logger.info("=== Validating JSON data ===")
             # Validate JSON data before saving
             json_test = json.dumps(input_data)
+
+            print(f"input_data complete data: {input_data}")
             logger.info(f"JSON validation passed. Data size: {len(json_test)} characters")
 
             logger.info("=== Attempting database connection ===")
