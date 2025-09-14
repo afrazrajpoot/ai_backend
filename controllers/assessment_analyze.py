@@ -121,8 +121,8 @@ class AssessmentController:
             logger.info(f"$1 userId: {input_data['userId']}")
             logger.info(f"$2 hrId: {input_data['hrId']}")
             logger.info(f"$3 departement: {input_data['departement']}")
-            logger.info(f"$4 executiveSummary: {input_data['executiveSummary'][:100]}...")
-            logger.info(f"$13 geniusFactorScore: {input_data['geniusFactorScore']}")
+            logger.info(f"$4 executiveSummary: {input_data.report['executiveSummary'][:100]}...")
+            logger.info(f"$13 geniusFactorScore: {input_data.report['geniusFactorScore']}")
 
             logger.info("=== Executing INSERT query ===")
             # Execute the query
@@ -131,16 +131,16 @@ class AssessmentController:
                 input_data["userId"],
                 input_data["hrId"],
                 input_data["departement"],
-                input_data["executiveSummary"],
-                json.dumps(input_data["geniusFactorProfileJson"]),
-                json.dumps(input_data["currentRoleAlignmentAnalysisJson"]),
-                json.dumps(input_data["internalCareerOpportunitiesJson"]),
-                json.dumps(input_data["retentionAndMobilityStrategiesJson"]),
-                json.dumps(input_data["developmentActionPlanJson"]),
-                json.dumps(input_data["personalizedResourcesJson"]),
-                json.dumps(input_data["dataSourcesAndMethodologyJson"]),
+                input_data.report["executiveSummary"],
+                json.dumps(input_data.report["geniusFactorProfileJson"]),
+                json.dumps(input_data.report["currentRoleAlignmentAnalysisJson"]),
+                json.dumps(input_data.report["internalCareerOpportunitiesJson"]),
+                json.dumps(input_data.report["retentionAndMobilityStrategiesJson"]),
+                json.dumps(input_data.report["developmentActionPlanJson"]),
+                json.dumps(input_data.report["personalizedResourcesJson"]),
+                json.dumps(input_data.report["dataSourcesAndMethodologyJson"]),
                 json.dumps(input_data["risk_analysis"]),
-                input_data["geniusFactorScore"]
+                input_data.report["geniusFactorScore"]
             )
 
             if result:
@@ -201,6 +201,23 @@ class AssessmentController:
         """
         try:
             logger.info(f"Starting assessment analysis for userId: {input_data.userId}, hrId: {input_data.hrId}")
+            # generate a raw query to get the departement of the user from the userId
+            # using asyncpg for raw query
+            db_params = {
+                "user": "postgres",
+                "password": "root",
+                "database": "genius_factor",
+                "host": "localhost",
+                "port": 5432
+            }
+            conn = await asyncpg.connect(**db_params)
+            departement = await conn.fetchval('SELECT "departement"[array_length("departement", 1)] FROM "User" WHERE id = $1', input_data.userId)
+            await conn.close()
+            if not departement:
+                departement = "Unknown"
+            input_data = input_data.dict()
+            input_data['departement'] = departement
+            logger.info(f"User departement: {departement}") 
 
             # Validate input data for notification
             notification_data = {
@@ -299,6 +316,7 @@ class AssessmentController:
             final_result = {
                 "status": "success",
                 "hrId": input_data.hrId,
+                "departement": departement,
                 "userId": input_data.userId,
                 "report": recommendations.get("report"),
                 "risk_analysis": recommendations.get("risk_analysis"),
