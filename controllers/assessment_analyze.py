@@ -211,7 +211,8 @@ class AssessmentController:
                 "port": 5432
             }
             conn = await asyncpg.connect(**db_params)
-            departement = await conn.fetchval('SELECT "departement"[array_length("departement", 1)] FROM "User" WHERE id = $1', input_data.userId)
+                        # departement is text[] in db, so fetch last element of the array
+            departement = await conn.fetchval('SELECT "department"[array_length("department", 1)] FROM "User" WHERE id = $1', input_data.userId)
             await conn.close()
             if not departement:
                 departement = "Unknown"
@@ -233,7 +234,6 @@ class AssessmentController:
                     logger.error(f"Invalid notification data: {key} is empty or not a string")
                     await NotificationService.send_user_notification(
                         input_data.userId,
-                        input_data.hrId,
                         {
                             'message': 'Invalid notification data',
                             'progress': 0,
@@ -251,7 +251,6 @@ class AssessmentController:
                 logger.error(f"Failed to analyze assessment data: {str(e)}")
                 await NotificationService.send_user_notification(
                     input_data.userId,
-                    input_data.hrId,
                     {
                         'message': 'Basic analysis failed',
                         'progress': 100,
@@ -268,7 +267,6 @@ class AssessmentController:
                 logger.error(f"Failed to analyze majority answers: {str(e)}")
                 await NotificationService.send_user_notification(
                     input_data.userId,
-                    input_data.hrId,
                     {
                         'message': 'Failed to perform advanced analysis',
                         'progress': 100,
@@ -285,7 +283,6 @@ class AssessmentController:
                 logger.error(f"Failed to generate recommendations: {str(e)}")
                 await NotificationService.send_user_notification(
                     input_data.userId,
-                    input_data.hrId,
                     {
                         'message': 'Failed to generate recommendations',
                         'progress': 100,
@@ -301,7 +298,6 @@ class AssessmentController:
                 
                 await NotificationService.send_user_notification(
                     input_data.userId,
-                    input_data.hrId,
                     {
                         'message': 'Analysis failed',
                         'progress': 100,
@@ -333,7 +329,6 @@ class AssessmentController:
             # Send success notification via Socket.IO
             await NotificationService.send_user_notification(
                 input_data.userId,
-                input_data.hrId,
                 {
                     'message': 'Assessment analysis completed successfully!',
                     'employeeName': input_data.employeeName,
@@ -353,7 +348,6 @@ class AssessmentController:
                 logger.error(f"Failed to save notification to database: {str(e)}")
                 await NotificationService.send_user_notification(
                     input_data.userId,
-                    input_data.hrId,
                     {
                         'message': 'Failed to save notification to database',
                         'progress': 100,
@@ -371,7 +365,6 @@ class AssessmentController:
             
             await NotificationService.send_user_notification(
                 input_data.userId,
-                input_data.hrId,
                 {
                     'message': 'Assessment analysis failed',
                     'progress': 100,
