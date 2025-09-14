@@ -234,6 +234,7 @@ class AssessmentController:
                     logger.error(f"Invalid notification data: {key} is empty or not a string")
                     await NotificationService.send_user_notification(
                         input_data['userId'],
+                        input_data['hrId'],
                         {
                             'message': 'Invalid notification data',
                             'progress': 0,
@@ -253,6 +254,7 @@ class AssessmentController:
                 logger.error(f"Failed to analyze assessment data: {str(e)}")
                 await NotificationService.send_user_notification(
                     input_data['userId'],
+                    input_data['hrId'],
                     {
                         'message': 'Basic analysis failed',
                         'progress': 100,
@@ -269,6 +271,7 @@ class AssessmentController:
                 logger.error(f"Failed to analyze majority answers: {str(e)}")
                 await NotificationService.send_user_notification(
                     input_data['userId'],
+                    input_data['hrId'],
                     {
                         'message': 'Failed to perform advanced analysis',
                         'progress': 100,
@@ -285,6 +288,7 @@ class AssessmentController:
                 logger.error(f"Failed to generate recommendations: {str(e)}")
                 await NotificationService.send_user_notification(
                     input_data['userId'],
+                    input_data['hrId'],
                     {
                         'message': 'Failed to generate recommendations',
                         'progress': 100,
@@ -300,6 +304,7 @@ class AssessmentController:
                 
                 await NotificationService.send_user_notification(
                     input_data['userId'],
+                    input_data['hrId'],
                     {
                         'message': 'Analysis failed',
                         'progress': 100,
@@ -330,16 +335,16 @@ class AssessmentController:
 
             # Send success notification via Socket.IO
             await NotificationService.send_user_notification(
-            input_data['userId'],
-            hr_id=input_data['hrId'],
-            data={
-                'message': 'Assessment analysis completed successfully!',
-                'employeeName': input_data['employeeName'],
-                'employeeEmail': input_data['employeeEmail'],
-                'progress': 100,
-                'status': 'unread',
-            }
-        )
+                input_data['userId'],
+                input_data['hrId'],
+                {
+                    'message': 'Assessment analysis completed successfully!',
+                    'employeeName': input_data['employeeName'],
+                    'employeeEmail': input_data['employeeEmail'],
+                    'progress': 100,
+                    'status': 'unread',
+                }
+            )
 
             # Save notification to database using DatabaseNotificationService
             try:
@@ -348,8 +353,8 @@ class AssessmentController:
                 logger.error(f"Failed to save notification to database: {str(e)}")
                 await NotificationService.send_user_notification(
                     input_data['userId'],
-                    hr_id=input_data['hrId'],
-                    data={
+                    input_data['hrId'],
+                    {
                         'message': 'Failed to save notification to database',
                         'progress': 100,
                         'status': 'error',
@@ -366,6 +371,7 @@ class AssessmentController:
             
             await NotificationService.send_user_notification(
                 input_data['userId'],
+                input_data['hrId'],
                 {
                     'message': 'Assessment analysis failed',
                     'progress': 100,
