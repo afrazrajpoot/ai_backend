@@ -50,6 +50,23 @@ class DBService:
         except Exception as e:
             logger.error(f"Error getting assessments: {str(e)}")
             raise
+    @classmethod
+    async def save_notification(cls, notification_data):
+        try:
+            db = await cls._get_db()
+            await db.notification.create(
+                data={
+                    "userId": notification_data.get("employeeId"),
+                    "hrId": notification_data.get("hrId"),
+                    "employeeName": notification_data.get("employeeName"),
+                    "employeeEmail": notification_data.get("employeeEmail"),
+                    "message": notification_data.get("message"),
+                    "status": notification_data.get("status", "unread"),
+                }
+            )
+        except Exception as e:
+            logger.error(f"Error saving notification: {str(e)}")
+            raise
 
     
     

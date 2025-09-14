@@ -121,8 +121,8 @@ class AssessmentController:
             logger.info(f"$1 userId: {input_data['userId']}")
             logger.info(f"$2 hrId: {input_data['hrId']}")
             logger.info(f"$3 departement: {input_data['departement']}")
-            logger.info(f"$4 executiveSummary: {input_data['report']['executiveSummary'][:100]}...")
-            logger.info(f"$13 geniusFactorScore: {input_data['report']['geniusFactorScore']}")
+            logger.info(f"$4 executive_summary: {input_data['report']['executive_summary'][:100]}...")
+            logger.info(f"$13 genius_factor_score: {input_data['report']['genius_factor_score']}")
 
             logger.info("=== Executing INSERT query ===")
             # Execute the query
