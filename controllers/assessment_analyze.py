@@ -23,7 +23,7 @@ db_notification_service = DBService()
 class AssessmentController:
     
     @staticmethod
-    async def save_to_db(input_data: AssessmentData) -> Dict[str, Any]:
+    async def save_to_db(input_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Minimal version: saves hardcoded data using raw PostgreSQL (asyncpg).
         """
@@ -121,8 +121,8 @@ class AssessmentController:
             logger.info(f"$1 userId: {input_data['userId']}")
             logger.info(f"$2 hrId: {input_data['hrId']}")
             logger.info(f"$3 departement: {input_data['departement']}")
-            logger.info(f"$4 executiveSummary: {input_data.report['executiveSummary'][:100]}...")
-            logger.info(f"$13 geniusFactorScore: {input_data.report['geniusFactorScore']}")
+            logger.info(f"$4 executiveSummary: {input_data['report']['executiveSummary'][:100]}...")
+            logger.info(f"$13 geniusFactorScore: {input_data['report']['geniusFactorScore']}")
 
             logger.info("=== Executing INSERT query ===")
             # Execute the query
@@ -131,16 +131,16 @@ class AssessmentController:
                 input_data["userId"],
                 input_data["hrId"],
                 input_data["departement"],
-                input_data.report["executiveSummary"],
-                json.dumps(input_data.report["geniusFactorProfileJson"]),
-                json.dumps(input_data.report["currentRoleAlignmentAnalysisJson"]),
-                json.dumps(input_data.report["internalCareerOpportunitiesJson"]),
-                json.dumps(input_data.report["retentionAndMobilityStrategiesJson"]),
-                json.dumps(input_data.report["developmentActionPlanJson"]),
-                json.dumps(input_data.report["personalizedResourcesJson"]),
-                json.dumps(input_data.report["dataSourcesAndMethodologyJson"]),
+                input_data["report"]["executiveSummary"],
+                json.dumps(input_data["report"]["geniusFactorProfileJson"]),
+                json.dumps(input_data["report"]["currentRoleAlignmentAnalysisJson"]),
+                json.dumps(input_data["report"]["internalCareerOpportunitiesJson"]),
+                json.dumps(input_data["report"]["retentionAndMobilityStrategiesJson"]),
+                json.dumps(input_data["report"]["developmentActionPlanJson"]),
+                json.dumps(input_data["report"]["personalizedResourcesJson"]),
+                json.dumps(input_data["report"]["dataSourcesAndMethodologyJson"]),
                 json.dumps(input_data["risk_analysis"]),
-                input_data.report["geniusFactorScore"]
+                input_data["report"]["geniusFactorScore"]
             )
 
             if result:
@@ -222,10 +222,10 @@ class AssessmentController:
 
             # Validate input data for notification
             notification_data = {
-                'employeeId': input_data.userId,
-                'hrId': input_data.hrId,
-                'employeeName': input_data.employeeName,
-                'employeeEmail': input_data.employeeEmail,
+                'employeeId': input_data['userId'],
+                'hrId': input_data['hrId'],
+                'employeeName': input_data['employeeName'],
+                'employeeEmail': input_data['employeeEmail'],
                 'message': 'Assessment analysis completed successfully!',
                 'status':'unread'
             }
@@ -233,7 +233,7 @@ class AssessmentController:
                 if not isinstance(value, str) or not value.strip():
                     logger.error(f"Invalid notification data: {key} is empty or not a string")
                     await NotificationService.send_user_notification(
-                        input_data.userId,
+                        input_data['userId'],
                         {
                             'message': 'Invalid notification data',
                             'progress': 0,
@@ -245,12 +245,12 @@ class AssessmentController:
 
             # 1. Get basic assessment results
             try:
-                basic_results = analyze_assessment_data(input_data.data)
+                basic_results = analyze_assessment_data(input_data['data'])
                 logger.info("Basic analysis completed")
             except Exception as e:
                 logger.error(f"Failed to analyze assessment data: {str(e)}")
                 await NotificationService.send_user_notification(
-                    input_data.userId,
+                    input_data['userId'],
                     {
                         'message': 'Basic analysis failed',
                         'progress': 100,
@@ -266,7 +266,7 @@ class AssessmentController:
             except Exception as e:
                 logger.error(f"Failed to analyze majority answers: {str(e)}")
                 await NotificationService.send_user_notification(
-                    input_data.userId,
+                    input_data['userId'],
                     {
                         'message': 'Failed to perform advanced analysis',
                         'progress': 100,
@@ -282,7 +282,7 @@ class AssessmentController:
             except Exception as e:
                 logger.error(f"Failed to generate recommendations: {str(e)}")
                 await NotificationService.send_user_notification(
-                    input_data.userId,
+                    input_data['userId'],
                     {
                         'message': 'Failed to generate recommendations',
                         'progress': 100,
@@ -297,7 +297,7 @@ class AssessmentController:
                 logger.error(error_msg)
                 
                 await NotificationService.send_user_notification(
-                    input_data.userId,
+                    input_data['userId'],
                     {
                         'message': 'Analysis failed',
                         'progress': 100,
@@ -311,9 +311,9 @@ class AssessmentController:
             # Prepare final result
             final_result = {
                 "status": "success",
-                "hrId": input_data.hrId,
+                "hrId": input_data['hrId'],
                 "departement": departement,
-                "userId": input_data.userId,
+                "userId": input_data['userId'],
                 "report": recommendations.get("report"),
                 "risk_analysis": recommendations.get("risk_analysis"),
                 "metadata": recommendations.get("metadata")
@@ -328,11 +328,11 @@ class AssessmentController:
 
             # Send success notification via Socket.IO
             await NotificationService.send_user_notification(
-                input_data.userId,
+                input_data['userId'],
                 {
                     'message': 'Assessment analysis completed successfully!',
-                    'employeeName': input_data.employeeName,
-                    'employeeEmail': input_data.employeeEmail,
+                    'employeeName': input_data['employeeName'],
+                    'employeeEmail': input_data['employeeEmail'],
                  
                     'progress': 100,
                     'status': 'unread',
@@ -347,7 +347,7 @@ class AssessmentController:
             except Exception as e:
                 logger.error(f"Failed to save notification to database: {str(e)}")
                 await NotificationService.send_user_notification(
-                    input_data.userId,
+                    input_data['userId'],
                     {
                         'message': 'Failed to save notification to database',
                         'progress': 100,
@@ -364,7 +364,7 @@ class AssessmentController:
             logger.error(f"Error in analyze_assessment: {str(e)}")
             
             await NotificationService.send_user_notification(
-                input_data.userId,
+                input_data['userId'],
                 {
                     'message': 'Assessment analysis failed',
                     'progress': 100,
