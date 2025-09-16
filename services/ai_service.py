@@ -258,7 +258,7 @@ class AIService:
         logger.info(f"Retrieved {len(all_docs)} documents (one from each source)")
         return result_text
     @classmethod
-    async def generate_career_recommendation(cls, analysis_result: str) -> Dict[str, Any]:
+    async def generate_career_recommendation(cls, analysis_result: str, all_answers: Any) -> Dict[str, Any]:
         try:
             # Check if analysis_result is empty or invalid
             if not analysis_result or not isinstance(analysis_result, str):
@@ -299,7 +299,7 @@ class AIService:
         
             chain = report_prompt | llm | parser
             output = await chain.ainvoke({"analysis_data": analysis_result})
-            risk_analysis = await cls._perform_risk_analysis(output.dict())
+            risk_analysis = await cls._perform_risk_analysis(output.dict(), all_answers)
          
             return {
                 "status": "success",
@@ -322,266 +322,287 @@ class AIService:
             return {"status": "error", "error": str(e)}
     
     @classmethod
-    async def _perform_risk_analysis(cls, report: Dict[str, Any]) -> Dict[str, Any]:
-        # Define state for LangGraph
-        class State(TypedDict):
-            report: Dict[str, Any]
-            search_results: Annotated[List[Dict[str, Any]], operator.add]
-            analysis: str
-            scores: Dict[str, Any]
-            trends: Dict[str, Any]
-            recommendations: List[str]
-            genius_factors: List[str]
-            company: str
+    
+        
+    async def _perform_risk_analysis(cls, report: Dict[str, Any], all_answers: Any) -> Dict[str, Any]:
+            # Define state for LangGraph
+            class State(TypedDict):
+                report: Dict[str, Any]
+                all_answers: Any
+                search_results: Annotated[List[Dict[str, Any]], operator.add]
+                analysis: str
+                scores: Dict[str, Any]
+                trends: Dict[str, Any]
+                recommendations: List[str]
+                genius_factors: List[str]
+                company: str
+                answer_fingerprint: int
 
-        # Extract genius factors and company from report
-        genius_factors = []
-        if "primary_genius_factor" in report:
-            genius_factors.append(report["primary_genius_factor"])
-        if "secondary_genius_factor" in report:
-            genius_factors.append(report["secondary_genius_factor"])
-        if not genius_factors:
-            genius_factors = ["General Talent"]
-            logger.warning("No genius factors in report, using default: General Talent")
-
-        # Get company from report or use default
-        company = report.get("company", "Fortune 1000 Company")
-
-        # Log input report for debugging
-        logger.debug(f"Input report: {json.dumps(report, indent=2)}")
-
-        # Node for retention trends search
-        async def retention_search_node(state: State) -> State:
-            search_results = []
+            # Extract genius factors and company from report
+            genius_factors = []
             try:
-                tavily = TavilySearchResults(api_key=settings.TAVILY_API_KEY, max_results=3)
-                queries = [
-                    f"employee retention statistics trends {state['company']} 2024",
-                    f"employee turnover prevention strategies {state['company']}"
-                ]
-                for query in queries:
-                    try:
-                        results = tavily.invoke({"query": query})
-                        if results and isinstance(results, list):
-                            search_results.extend(results)
-                        await asyncio.sleep(0.1)
-                    except Exception as e:
-                        logger.warning(f"Retention query failed for '{query}': {e}")
-                        continue
-                logger.info(f"Retention search found {len(search_results)} results")
-            except Exception as e:
-                logger.error(f"Retention search error: {e}")
-                search_results = [{
-                    "title": f"Retention Trends for {state['company']}",
-                    "content": f"Generic retention trends for {state['company']} focus on employee engagement and well-being.",
-                    "url": "https://example.com/retention-trends"
-                }]
-            logger.debug(f"Retention search results: {json.dumps(search_results, indent=2)}")
-            return {"search_results": search_results}
+                gfp = report.get("genius_factor_profile", {})
+                if isinstance(gfp, dict):
+                    if gfp.get("primary_genius_factor"):
+                        genius_factors.append(gfp.get("primary_genius_factor"))
+                    if gfp.get("secondary_genius_factor"):
+                        genius_factors.append(gfp.get("secondary_genius_factor"))
+            except Exception:
+                pass
+            if not genius_factors:
+                if "primary_genius_factor" in report:
+                    genius_factors.append(report["primary_genius_factor"])
+                if "secondary_genius_factor" in report:
+                    genius_factors.append(report["secondary_genius_factor"])
+            if not genius_factors:
+                genius_factors = ["General Talent"]
+                logger.warning("No genius factors in report, using default: General Talent")
 
-        # Node for mobility programs search
-        async def mobility_search_node(state: State) -> State:
-            search_results = []
+            # Get company from report or use default
+            company = report.get("company", "Fortune 1000 Company")
+
+            # Build deterministic fingerprint from answers for variability
             try:
-                tavily = TavilySearchResults(api_key=settings.TAVILY_API_KEY, max_results=3)
-                queries = [
-                    f"internal mobility programs best practices {state['company']}",
-                    f"talent retention innovative approaches {state['company']}"
-                ]
-                for query in queries:
-                    try:
-                        results = tavily.invoke({"query": query})
-                        if results and isinstance(results, list):
-                            search_results.extend(results)
-                        await asyncio.sleep(0.1)
-                    except Exception as e:
-                        logger.warning(f"Mobility query failed for '{query}': {e}")
-                        continue
-                logger.info(f"Mobility search found {len(search_results)} results")
-            except Exception as e:
-                logger.error(f"Mobility search error: {e}")
-                search_results = [{
-                    "title": f"Mobility Trends for {state['company']}",
-                    "content": f"Generic mobility trends for {state['company']} emphasize upskilling and career pathing.",
-                    "url": "https://example.com/mobility-trends"
-                }]
-            logger.debug(f"Mobility search results: {json.dumps(search_results, indent=2)}")
-            return {"search_results": search_results}
+                answers_serialized = json.dumps(all_answers, sort_keys=True, ensure_ascii=False)
+            except Exception:
+                answers_serialized = str(all_answers)
+            fingerprint_hex = hashlib.md5(answers_serialized.encode("utf-8")).hexdigest()
+            answer_fingerprint = int(fingerprint_hex[:8], 16)
 
-        # Node for career development search
-      
-        # Node to analyze search results and compute comprehensive analysis
-        async def analyze_node(state: State) -> State:
-            llm = ChatOpenAI(
-                api_key=settings.OPENAI_API_KEY,
-                model="gpt-4o-mini",
-                temperature=0.5,  # Increased for variability
-                max_tokens=3000
-            )
+            # Log input report for debugging
+            logger.debug(f"Input report: {json.dumps(report, indent=2)}")
 
-            # Enhanced prompt for score variability
-            analysis_prompt = PromptTemplate(
-                template=(
-                    "You are an HR risk analyst specializing in employee retention and mobility. "
-                    "Analyze the following employee report: {report}\n\n"
-                    "And the following web search results on retention, mobility, and career trends: {search_results}\n\n"
-                    "Provide a comprehensive analysis tailored to the employee's profile and genius factors ({genius_factors}) "
-                    "for {company_name}. Ensure scores vary based on tenure, role, performance, and genius factors.\n\n"
-                    "1. SCORES (0-100 scale, must reflect report specifics):\n"
-                    "   - Genius Factor Alignment Score: Higher (80-100) if {genius_factors} align with {company_name}'s needs (e.g., innovation for tech, leadership for management). Lower (50-70) for generic or misaligned factors.\n"
-                    "   - Retention Risk Score: Higher (50-80) for low tenure (<3 years), poor performance, or role misalignment. Lower (10-40) for high tenure (>5 years) or strong fit.\n"
-                    "   - Mobility Opportunity Score: Higher (80-100) if {genius_factors} and role suggest internal growth opportunities. Lower (50-70) if limited by company structure.\n\n"
-                    "2. TRENDS ANALYSIS (specific to employee and {company_name}):\n"
-                    "   - Retention trends in the industry/{company_name}\n"
-                    "   - Internal mobility patterns and innovations\n"
-                    "   - Risk factors specific to this employee's profile\n\n"
-                    "3. RECOMMENDATIONS (3-5 actionable, employee-specific items):\n"
-                    "   - Retention strategies tailored to employee\n"
-                    "   - Mobility enhancement opportunities\n"
-                    "   - Risk mitigation actions\n\n"
-                    "Output as JSON: {{\n"
-                    "  \"scores\": {{\n"
-                    "    \"genius_factor_score\": int,\n"
-                    "    \"retention_risk_score\": int,\n"
-                    "    \"mobility_opportunity_score\": int\n"
-                    "  }},\n"
-                    "  \"trends\": {{\n"
-                    "    \"retention_trends\": str,\n"
-                    "    \"mobility_trends\": str,\n"
-                    "    \"risk_factors\": str\n"
-                    "  }},\n"
-                    "  \"recommendations\": [str],\n"
-                    "  \"reasoning\": str\n"
-                    "}}"
-                ),
-                input_variables=["report", "search_results", "genius_factors", "company_name"]
-            )
+            # Node for retention trends search
+            async def retention_search_node(state: State) -> State:
+                search_results = []
+                try:
+                    tavily = TavilySearchResults(api_key=settings.TAVILY_API_KEY, max_results=3)
+                    queries = [
+                        f"employee retention statistics trends {state['company']} 2024",
+                        f"employee turnover prevention strategies {state['company']}"
+                    ]
+                    for query in queries:
+                        try:
+                            results = tavily.invoke({"query": query})
+                            if results and isinstance(results, list):
+                                search_results.extend(results)
+                            await asyncio.sleep(0.1)
+                        except Exception as e:
+                            logger.warning(f"Retention query failed for '{query}': {e}")
+                            continue
+                    logger.info(f"Retention search found {len(search_results)} results")
+                except Exception as e:
+                    logger.error(f"Retention search error: {e}")
+                    search_results = [{
+                        "title": f"Retention Trends for {state['company']}",
+                        "content": f"Generic retention trends for {state['company']} focus on employee engagement and well-being.",
+                        "url": "https://example.com/retention-trends"
+                    }]
+                logger.debug(f"Retention search results: {json.dumps(search_results, indent=2)}")
+                return {"search_results": search_results}
 
-            try:
-                # Format the prompt with actual data
-                formatted_prompt = await analysis_prompt.ainvoke({
-                    "report": json.dumps(state["report"], indent=2),
-                    "search_results": json.dumps(state["search_results"], indent=2),
-                    "genius_factors": ', '.join(state["genius_factors"]),
-                    "company_name": state["company"]
-                })
-                
-                # Debug: Log the exact prompt sent to the LLM
-                logger.debug(f"LLM Prompt: {formatted_prompt.text}")
-                
-                # Get response from LLM with structured output
-                response = await llm.ainvoke(formatted_prompt, response_format={"type": "json_object"})
-                
-                content = response.content.strip()
-                
-                # Debug: Log the raw LLM response
-                logger.debug(f"LLM Response: {content}")
-                
-                # Parse the JSON response
-                analysis_data = json.loads(content)
-                
-                # Rule-based score adjustment for variability
-                scores = analysis_data.get("scores", {
-                    "genius_factor_score": 50,
-                    "retention_risk_score": 50,
-                    "mobility_opportunity_score": 50
-                })
-                
-                # Adjust scores based on report specifics
-                if "tenure" in state["report"]:
-                    tenure = state["report"]["tenure"]
-                    scores["retention_risk_score"] = min(100, max(0, scores["retention_risk_score"] + (5 - tenure) * 10))
-                if "role" in state["report"] and any(factor.lower() in state["report"]["role"].lower() for factor in state["genius_factors"]):
-                    scores["genius_factor_score"] = min(100, scores["genius_factor_score"] + 10)
-                if len(state["genius_factors"]) > 1 or "career development" in json.dumps(state["search_results"]).lower():
-                    scores["mobility_opportunity_score"] = min(100, scores["mobility_opportunity_score"] + 10)
-                
-                trends = analysis_data.get("trends", {
-                    "retention_trends": "Unable to analyze trends",
-                    "mobility_trends": "Unable to analyze mobility trends",
-                    "risk_factors": "Unable to identify specific risk factors"
-                })
-                
-                recommendations = analysis_data.get("recommendations", [
-                    f"Implement career development for {', '.join(state['genius_factors'])}",
-                    f"Create mobility pathways for {state['company']}",
-                    "Enhance mentorship programs"
-                ])
-                
-            except json.JSONDecodeError as e:
-                logger.error(f"JSON parsing error: {e}")
-                logger.error(f"Raw content that failed to parse: {content}")
-                scores = {
-                    "genius_factor_score": 50,
-                    "retention_risk_score": 50,
-                    "mobility_opportunity_score": 50
-                }
-                trends = {
-                    "retention_trends": "Error in trend analysis",
-                    "mobility_trends": "Error in mobility analysis",
-                    "risk_factors": "Analysis error occurred"
-                }
-                recommendations = [f"Conduct manual analysis for {state['company']} due to system error"]
-            except Exception as e:
-                logger.error(f"Error in analyze_node: {e}")
-                scores = {
-                    "genius_factor_score": 50,
-                    "retention_risk_score": 50,
-                    "mobility_opportunity_score": 50
-                }
-                trends = {
-                    "retention_trends": f"Analysis error: {str(e)}",
-                    "mobility_trends": f"Analysis error: {str(e)}",
-                    "risk_factors": f"Analysis error: {str(e)}"
-                }
-                recommendations = [f"Review manually for {state['company']} due to analysis error"]
+            # Node for mobility programs search
+            async def mobility_search_node(state: State) -> State:
+                search_results = []
+                try:
+                    tavily = TavilySearchResults(api_key=settings.TAVILY_API_KEY, max_results=3)
+                    queries = [
+                        f"internal mobility programs best practices {state['company']}",
+                        f"talent retention innovative approaches {state['company']}"
+                    ]
+                    for query in queries:
+                        try:
+                            results = tavily.invoke({"query": query})
+                            if results and isinstance(results, list):
+                                search_results.extend(results)
+                            await asyncio.sleep(0.1)
+                        except Exception as e:
+                            logger.warning(f"Mobility query failed for '{query}': {e}")
+                            continue
+                    logger.info(f"Mobility search found {len(search_results)} results")
+                except Exception as e:
+                    logger.error(f"Mobility search error: {e}")
+                    search_results = [{
+                        "title": f"Mobility Trends for {state['company']}",
+                        "content": f"Generic mobility trends for {state['company']} emphasize upskilling and career pathing.",
+                        "url": "https://example.com/mobility-trends"
+                    }]
+                logger.debug(f"Mobility search results: {json.dumps(search_results, indent=2)}")
+                return {"search_results": search_results}
 
-            analysis_summary = "Comprehensive risk analysis completed with trends and recommendations."
-            return {
-                "analysis": analysis_summary,
-                "scores": scores,
-                "trends": trends,
-                "recommendations": recommendations
+            # Node to analyze search results and compute comprehensive analysis
+            async def analyze_node(state: State) -> State:
+                llm = ChatOpenAI(
+                    api_key=settings.OPENAI_API_KEY,
+                    model="gpt-4o-mini",
+                    temperature=0.5,  # Increased for variability
+                    max_tokens=3000
+                )
+
+                # Enhanced prompt for score variability, now including all_answers
+                analysis_prompt = PromptTemplate(
+                    template=(
+                        "You are an HR risk analyst specializing in employee retention and mobility. "
+                        "Analyze the following employee report: {report}\n\n"
+                        "And the full employee answers/responses: {all_answers}\n\n"
+                        "And the following web search results on retention, mobility, and career trends: {search_results}\n\n"
+                        "Provide a comprehensive analysis tailored to the employee's profile, answers, and genius factors ({genius_factors}) "
+                        "for {company_name}. Ensure scores vary based on tenure, role, performance, genius factors, and insights from the all_answers (e.g., employee satisfaction, career aspirations, feedback on company culture).\n\n"
+                        "1. SCORES (0-100 scale, must reflect report specifics and all_answers):\n"
+                        "   - Genius Factor Alignment Score: Higher (80-100) if {genius_factors} align with {company_name}'s needs (e.g., innovation for tech, leadership for management) and answers show strong personal fit. Lower (50-70) for generic or misaligned factors, or if answers indicate dissatisfaction.\n"
+                        "   - Retention Risk Score: Higher (50-80) for low tenure (<3 years), poor performance, role misalignment, or negative sentiments in answers (e.g., intent to leave). Lower (10-40) for high tenure (>5 years), strong fit, or positive feedback in answers.\n"
+                        "   - Mobility Opportunity Score: Higher (80-100) if {genius_factors} and role/answers suggest internal growth opportunities (e.g., expressed interest in advancement). Lower (50-70) if limited by company structure or answers show stagnation.\n\n"
+                        "2. TRENDS ANALYSIS (specific to employee, answers, and {company_name}):\n"
+                        "   - Retention trends in the industry/{company_name}\n"
+                        "   - Internal mobility patterns and innovations\n"
+                        "   - Risk factors specific to this employee's profile and answers\n\n"
+                        "3. RECOMMENDATIONS (3-5 actionable, employee-specific items):\n"
+                        "   - Retention strategies tailored to employee and answers\n"
+                        "   - Mobility enhancement opportunities based on expressed interests\n"
+                        "   - Risk mitigation actions\n\n"
+                        "Output as JSON: {{\n"
+                        "  \"scores\": {{\n"
+                        "    \"genius_factor_score\": int,\n"
+                        "    \"retention_risk_score\": int,\n"
+                        "    \"mobility_opportunity_score\": int\n"
+                        "  }},\n"
+                        "  \"trends\": {{\n"
+                        "    \"retention_trends\": str,\n"
+                        "    \"mobility_trends\": str,\n"
+                        "    \"risk_factors\": str\n"
+                        "  }},\n"
+                        "  \"recommendations\": [str],\n"
+                        "  \"reasoning\": str\n"
+                        "}}"
+                    ),
+                    input_variables=["report", "all_answers", "search_results", "genius_factors", "company_name"]
+                )
+
+                try:
+                    # Format the prompt with actual data
+                    formatted_prompt = await analysis_prompt.ainvoke({
+                        "report": json.dumps(state["report"], indent=2),
+                        "all_answers": json.dumps(state["all_answers"], indent=2),
+                        "search_results": json.dumps(state["search_results"], indent=2),
+                        "genius_factors": ', '.join(state["genius_factors"]),
+                        "company_name": state["company"]
+                    })
+                    
+                    # Debug: Log the exact prompt sent to the LLM
+                    logger.debug(f"LLM Prompt: {formatted_prompt.text}")
+                    
+                    # Get response from LLM with structured output
+                    response = await llm.ainvoke(formatted_prompt, response_format={"type": "json_object"})
+                    
+                    content = response.content.strip()
+                    
+                    # Debug: Log the raw LLM response
+                    logger.debug(f"LLM Response: {content}")
+                    
+                    # Parse the JSON response
+                    analysis_data = json.loads(content)
+                    
+                    # Use LLM-generated scores directly (no rule-based override, as LLM now considers all_answers fully)
+                    scores = analysis_data.get("scores", {
+                        "genius_factor_score": 50,
+                        "retention_risk_score": 50,
+                        "mobility_opportunity_score": 50
+                    })
+                    
+                    # Optional: Light deterministic variability from fingerprint for subtle tuning, but preserve LLM intent
+                    fp = state["answer_fingerprint"]
+                    base_var = (fp % 11) - 5  # -5 to +5 adjustment
+                    for key in scores:
+                        scores[key] = int(min(100, max(0, scores[key] + base_var)))
+                    
+                    trends = analysis_data.get("trends", {
+                        "retention_trends": "Unable to analyze trends",
+                        "mobility_trends": "Unable to analyze mobility trends",
+                        "risk_factors": "Unable to identify specific risk factors"
+                    })
+                    
+                    recommendations = analysis_data.get("recommendations", [
+                        f"Implement career development for {', '.join(state['genius_factors'])}",
+                        f"Create mobility pathways for {state['company']}",
+                        "Enhance mentorship programs"
+                    ])
+                    
+                except json.JSONDecodeError as e:
+                    logger.error(f"JSON parsing error: {e}")
+                    logger.error(f"Raw content that failed to parse: {content}")
+                    scores = {
+                        "genius_factor_score": 50,
+                        "retention_risk_score": 50,
+                        "mobility_opportunity_score": 50
+                    }
+                    trends = {
+                        "retention_trends": "Error in trend analysis",
+                        "mobility_trends": "Error in mobility analysis",
+                        "risk_factors": "Analysis error occurred"
+                    }
+                    recommendations = [f"Conduct manual analysis for {state['company']} due to system error"]
+                except Exception as e:
+                    logger.error(f"Error in analyze_node: {e}")
+                    scores = {
+                        "genius_factor_score": 50,
+                        "retention_risk_score": 50,
+                        "mobility_opportunity_score": 50
+                    }
+                    trends = {
+                        "retention_trends": f"Analysis error: {str(e)}",
+                        "mobility_trends": f"Analysis error: {str(e)}",
+                        "risk_factors": f"Analysis error: {str(e)}"
+                    }
+                    recommendations = [f"Review manually for {state['company']} due to analysis error"]
+
+                analysis_summary = "Comprehensive risk analysis completed with trends and recommendations."
+                return {
+                    "analysis": analysis_summary,
+                    "scores": scores,
+                    "trends": trends,
+                    "recommendations": recommendations
+                }
+
+            # Build the LangGraph with parallel workflow
+            graph = StateGraph(State)
+            graph.add_node("retention_search", retention_search_node)
+            graph.add_node("mobility_search", mobility_search_node)
+            # graph.add_node("career_search", career_search_node)
+            graph.add_node("analyze", analyze_node)
+            
+            # Parallel execution: all search nodes run concurrently
+            graph.add_edge("retention_search", "analyze")
+            graph.add_edge("mobility_search", "analyze")
+            # graph.add_edge("career_search", "analyze")
+            graph.add_edge("analyze", END)
+            
+            # Set parallel entry points
+            graph.set_entry_point("retention_search")
+            graph.set_entry_point("mobility_search")
+            # graph.set_entry_point("career_search")
+            
+            app = graph.compile()
+
+            # Invoke the graph
+            initial_state = {
+                "report": report,
+                "all_answers": all_answers,
+                "search_results": [],
+                "analysis": "",
+                "scores": {},
+                "trends": {},
+                "recommendations": [],
+                "genius_factors": genius_factors,
+                "company": company,
+                "answer_fingerprint": answer_fingerprint
             }
+            final_state = await app.ainvoke(initial_state)
 
-        # Build the LangGraph with parallel workflow
-        graph = StateGraph(State)
-        graph.add_node("retention_search", retention_search_node)
-        graph.add_node("mobility_search", mobility_search_node)
-        # graph.add_node("career_search", career_search_node)
-        graph.add_node("analyze", analyze_node)
-        
-        # Parallel execution: all search nodes run concurrently
-        graph.add_edge("retention_search", "analyze")
-        graph.add_edge("mobility_search", "analyze")
-        # graph.add_edge("career_search", "analyze")
-        graph.add_edge("analyze", END)
-        
-        # Set parallel entry points
-        graph.set_entry_point("retention_search")
-        graph.set_entry_point("mobility_search")
-        # graph.set_entry_point("career_search")
-        
-        app = graph.compile()
-
-        # Invoke the graph
-        initial_state = {
-            "report": report,
-            "search_results": [],
-            "analysis": "",
-            "scores": {},
-            "trends": {},
-            "recommendations": [],
-            "genius_factors": genius_factors,
-            "company": company
-        }
-        final_state = await app.ainvoke(initial_state)
-
-        return {
-            "analysis_summary": final_state["analysis"],
-            "scores": final_state["scores"],
-            "trends": final_state["trends"],
-            "recommendations": final_state["recommendations"],
-            "genius_factors": genius_factors,
-            "company": company
-        }
+            return {
+                "analysis_summary": final_state["analysis"],
+                "scores": final_state["scores"],
+                "trends": final_state["trends"],
+                "recommendations": final_state["recommendations"],
+                "genius_factors": genius_factors,
+                "company": company
+            }

@@ -264,7 +264,7 @@ async def hr_dashboard(sid, data):
         # Emit the comprehensive dashboard data
         await sio.emit('reports_info', response_data, to=sid)
 
-        print(f"✅ Real dashboard data sent for HR {hr_id}: {total_employees} employees across {len(department_metrics)} departments")
+        # print(f"✅ Real dashboard data sent for HR {hr_id}: {total_employees} employees across {len(department_metrics)} departments")
 
     except Exception as e:
         error_msg = f"Error in hr_dashboard: {str(e)}"
@@ -346,7 +346,8 @@ async def internal_mobility(sid, data):
                             'transfer': dept.transfer if ingoing == dept.ingoing[-1] else None
                         })
                 except (KeyError, ValueError) as e:
-                    print(f"Error processing ingoing entry for department {dept.name}: {e}")
+                    # print(f"Error processing ingoing entry for department {dept.name}: {e}")
+
                     continue
 
             # Process outgoing array
@@ -445,7 +446,7 @@ async def internal_mobility(sid, data):
 
         # Emit the mobility data
         await sio.emit('mobility_info', response_data, to=sid)
-        print(f"✅ Mobility data sent for HR {hr_id}: {total_movements} total movements, {len(users)} users")
+        # print(f"✅ Mobility data sent for HR {hr_id}: {total_movements} total movements, {len(users)} users")
 
     except Exception as e:
         error_msg = f"Error in internal_mobility: {str(e)}"
@@ -746,7 +747,7 @@ async def admin_dashboard(sid, data):
         # Emit the admin dashboard data
         await sio.emit('reports_info', response_data, to=sid)
 
-        print(f"✅ Admin dashboard data sent: {total_reports} reports, {df['employee_id'].nunique()} employees, {len(unique_hr_ids)} HR IDs, {len(unique_departments)} departments")
+        # print(f"✅ Admin dashboard data sent: {total_reports} reports, {df['employee_id'].nunique()} employees, {len(unique_hr_ids)} HR IDs, {len(unique_departments)} departments")
 
     except Exception as e:
         error_msg = f"Error in admin_dashboard: {str(e)}"
@@ -940,7 +941,7 @@ async def admin_internal_mobility_analysis(sid, data):
         }
 
         await sio.emit('mobility_analysis', response_data, to=sid)
-        print(f"✅ Mobility analysis with trends completed for {len(all_months)} months: {all_months}")
+        # print(f"✅ Mobility analysis with trends completed for {len(all_months)} months: {all_months}")
 
     except Exception as e:
         error_msg = f"Error: {str(e)}"
@@ -1107,7 +1108,7 @@ async def get_rooms(sid):
     """Debug endpoint to see all rooms"""
     if hasattr(sio, 'manager') and sio.manager.rooms:
         rooms = {str(room): list(sids) for room, sids in sio.manager.rooms.items()}
-        print("🏠 All rooms:", rooms)
+        # print("🏠 All rooms:", rooms)
         await sio.emit('rooms_info', {'rooms': rooms}, to=sid)
     else:
         await sio.emit('rooms_info', {'error': 'No manager available'}, to=sid)

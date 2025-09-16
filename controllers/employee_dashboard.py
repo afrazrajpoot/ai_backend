@@ -39,7 +39,7 @@ class DashboardController:
                 "careerMatches": len(last_assessment['results']['strengths']) if last_assessment else 0,
                 "recentRecommendations": DashboardController._get_recent_recommendations(last_assessment),
                 "monthlyStats": DashboardController._get_monthly_stats(assessments),
-                "aiRecommendation": await AIService.generate_career_recommendation(last_assessment)
+                "aiRecommendation": await AIService.generate_career_recommendation(last_assessment, (last_assessment.get('allAnswers') if isinstance(last_assessment, dict) else {}))
             }
         except Exception as e:
             logger.error(f"Error in get_dashboard: {str(e)}")
@@ -126,7 +126,7 @@ class DashboardController:
 
             recommendation = JobRecommendationService()
             recommendations = await recommendation.recommend_jobs_for_employee(employee_id, recruiter_id)
-            print(recommendations,'recommendations')
+            # print(recommendations,'recommendations')
             return {"recommendations": recommendations}
         except Exception as e:
             logger.error(f"Error in recommend: {str(e)}")

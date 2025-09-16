@@ -55,9 +55,9 @@ async def parse_and_save_jobs(file, recruiter_id: str):
         raise ValueError("File has no rows")
 
     # --- Debug ---
-    print("[DEBUG] Number of rows:", len(rows))
-    print("[DEBUG] Columns detected:", rows[0].keys())
-    print("[DEBUG] First 5 rows:")
+    # print("[DEBUG] Number of rows:", len(rows))
+    # print("[DEBUG] Columns detected:", rows[0].keys())
+    # print("[DEBUG] First 5 rows:")
     for r in rows[:5]:
         print(r)
 
@@ -68,7 +68,7 @@ async def parse_and_save_jobs(file, recruiter_id: str):
     for idx, row in enumerate(rows):
         title = str(row.get("title", "")).strip()
         if not title:
-            print(f"[WARNING] Row {idx+1} missing title. Skipping.")
+            # print(f"[WARNING] Row {idx+1} missing title. Skipping.")
             continue
 
         try:
@@ -84,9 +84,10 @@ async def parse_and_save_jobs(file, recruiter_id: str):
                 }
             )
             inserted_jobs.append(job)
-            print(f"[INFO] Job {idx+1} inserted: {job.title}")
+            # print(f"[INFO] Job {idx+1} inserted: {job.title}")
         except Exception as e:
-            print(f"[ERROR] Failed to insert row {idx+1}: {e}")
+            raise ValueError(f"Failed to insert row {idx+1}: {e}")
+            # print(f"[ERROR] Failed to insert row {idx+1}: {e}")
 
     await db.disconnect()
     return inserted_jobs

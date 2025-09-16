@@ -43,8 +43,8 @@ class DatabaseService:
                 # For any other type, convert to string and wrap
                 json_data = json.dumps({"raw_content": str(company_detail)})
 
-            print(f"Final JSON data to save: {json_data}")
-            print(f"Final JSON data type: {type(json_data)}")
+            # print(f"Final JSON data to save: {json_data}")
+            # print(f"Final JSON data type: {type(json_data)}")
 
             # Create company record with JSON string
             company = await self.prisma.company.create(
@@ -60,8 +60,8 @@ class DatabaseService:
                 "updatedAt": company.updatedAt
             }
         except Exception as e:
-            print(f"Database error details: {str(e)}")
-            print(f"Error type: {type(e)}")
+            # print(f"Database error details: {str(e)}")
+            # print(f"Error type: {type(e)}")
             raise Exception(f"Error saving company data: {str(e)}")
     async def get_company_by_id(self, company_id: str) -> Optional[Dict[str, Any]]:
         """Get a company by ID"""

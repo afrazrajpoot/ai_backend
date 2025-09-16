@@ -36,7 +36,7 @@ class AssessmentController:
             # Validate JSON data before saving
             json_test = json.dumps(input_data)
 
-            print(f"input_data complete data: {input_data}")
+            # print(f"input_data complete data: {input_data}")
             logger.info(f"JSON validation passed. Data size: {len(json_test)} characters")
 
             logger.info("=== Attempting database connection ===")
@@ -283,7 +283,7 @@ class AssessmentController:
             
             # 3. Generate professional career recommendation report
             try:
-                recommendations = await ai_service.generate_career_recommendation(rag_results)
+                recommendations = await ai_service.generate_career_recommendation(rag_results, input_data['allAnswers'])
             except Exception as e:
                 logger.error(f"Failed to generate recommendations: {str(e)}")
                 await NotificationService.send_user_notification(

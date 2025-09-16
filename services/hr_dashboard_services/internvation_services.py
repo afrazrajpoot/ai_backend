@@ -106,7 +106,7 @@ class LLMService:
         return result
 
     async def analyze_and_save_retention_risk(self, departments_data: List[Dict[str, Any]]) -> Dict[str, Any]:
-        print(departments_data,'my department data')
+        # print(departments_data,'my department data')
         """
         Analyze retention risk and save results to database for each department
         """

@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import List
+from typing import List, Any
 
 class QuestionAnswer(BaseModel):
     question: str = Field(description="The question text")
@@ -44,6 +44,7 @@ class AssessmentPart(BaseModel):
 
 class AssessmentData(BaseModel):
     data: List[AssessmentPart]
+    allAnswers: Any
     userId: str
     hrId: str
     employeeName: str

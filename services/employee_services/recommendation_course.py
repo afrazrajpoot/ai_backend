@@ -125,7 +125,7 @@ class EmployeeService:
             return courses[:5]  # Limit to 5
 
         except Exception as e:
-            print(f"Course recommendation failed: {e}")
+            # print(f"Course recommendation failed: {e}")
             return [
                 RecommendedCourse(
                     title="Python Programming",
@@ -172,5 +172,5 @@ class EmployeeService:
             
             return search_results
         except Exception as e:
-            print(f"Tavily search failed: {e}")
+            # print(f"Tavily search failed: {e}")
             return []
