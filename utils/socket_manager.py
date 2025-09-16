@@ -210,6 +210,7 @@ async def hr_dashboard(sid, data):
             color = color_palette[i % len(color_palette)]
             
             dashboard_data.append({
+                "hrId": hr_id,
                 'name': dept_name,
                 'color': color,
                 'employee_count': metrics['employee_count'],
@@ -230,6 +231,7 @@ async def hr_dashboard(sid, data):
 
         # Prepare the response with all real data
         response_data = {
+           "hrId": hr_id,
             'dashboardData': dashboard_data,
             'overallMetrics': {
                 'total_employees': total_employees,

@@ -1,11 +1,18 @@
 from fastapi import APIRouter
-# from models.chat_models import ChatMessage
-# from controllers.chat_controller import ChatController
 from controllers.hr_dashboard_controllers.chat_controller import ChatController
 from utils.models import ChatMessage
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 controller = ChatController()
+
+# Add startup/shutdown events
+@router.on_event("startup")
+async def startup():
+    await controller.startup()
+
+@router.on_event("shutdown")
+async def shutdown():
+    await controller.shutdown()
 
 @router.post("")
 async def chat_with_ai(chat_message: ChatMessage):

@@ -56,7 +56,7 @@ class DBService:
             db = await cls._get_db()
             await db.notification.create(
                 data={
-                    "userId": notification_data.get("employeeId"),
+                    "employeeId": notification_data.get("employeeId"),
                     "hrId": notification_data.get("hrId"),
                     "employeeName": notification_data.get("employeeName"),
                     "employeeEmail": notification_data.get("employeeEmail"),

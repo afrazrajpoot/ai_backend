@@ -206,3 +206,16 @@ model Notification{
    createdAt                         DateTime @default(now())
   updatedAt                         DateTime @updatedAt
 }
+
+
+model ChatConversation {
+  id           String   @id @default(cuid())
+  hr_id        String
+  department   String
+  messages     Json     // Store entire conversation as JSON array
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([hr_id, department])
+  @@map("chat_conversations")
+}

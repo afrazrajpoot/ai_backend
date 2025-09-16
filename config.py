@@ -6,7 +6,7 @@ load_dotenv()
 class Settings:
 
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-    ALLOWED_ORIGINS = ["https://geniusfactor.ai","http://127.0.0.1:3000", "http://127.0.0.1:8000"]
+    ALLOWED_ORIGINS = ["https://geniusfactor.ai","http://localhost:3000", "http://127.0.0.1:8000"]
     TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 
 settings = Settings()

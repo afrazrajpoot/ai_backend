@@ -1,10 +1,1 @@
-my response data is like this 
-
-data:{
-    hrId: "",
-    department: "",
-    outgoing: "",
-    incoming: "",
-    date: "",
-    
-}
+[{'color': 'hsl(var(--hr-chart-1))', 'completion': 1, 'employee_count': 1, 'metrics': {'avg_scores': {'genius_factor_score': 90.0, 'retention_risk_score': 20.0, 'mobility_opportunity_score': 95.0, 'productivity_score': 90.0, 'engagement_score': 80.0, 'skills_alignment_score': 95.0}, 'employee_count': 1, 'engagement_distribution': {'Low (0-50)': 0, 'Medium (51-70)': 0, 'High (71-100)': 1}, 'first_report_date': '2025-09-15', 'genius_factor_distribution': {'0-20': 0, '21-40': 0, '41-60': 0, '61-80': 0, '81-100': 1}, 'last_report_date': '2025-09-15', 'mobility_trend': {'Sep': 1}, 'productivity_distribution': {'0-20': 0, '21-40': 0, '41-60': 0, '61-80': 0, '81-100': 1}, 'retention_risk_distribution': {'Low (0-30)': 1, 'Medium (31-60)': 0, 'High (61-100)': 0}, 'skills_alignment_distribution': {'Poor (0-50)': 0, 'Fair (51-70)': 0, 'Good (71-85)': 0, 'Excellent (86-100)': 1}}, 'name': 'Education'}]

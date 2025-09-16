@@ -91,6 +91,7 @@ class DepartmentMetrics(BaseModel):
     skills_alignment_distribution: Dict[str, int]
 
 class DepartmentInput(BaseModel):
+    hrId: str
     color: str
     completion: int
     employee_count: int
