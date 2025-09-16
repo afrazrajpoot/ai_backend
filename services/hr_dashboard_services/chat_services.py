@@ -26,7 +26,7 @@ class ChatService:
             db_params = {
                 "user": "postgres",
                 "password": "root",
-                "database": "hr-management",
+                "database": "genius_factor",
                 "host": "localhost",
                 "port": 5432
             }
@@ -39,7 +39,7 @@ class ChatService:
             # print("Database connection established successfully")
         except Exception as e:
             # print(f"Database connection error: {e}")
-            
+
             raise
 
     async def disconnect_db(self):

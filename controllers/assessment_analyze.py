@@ -44,7 +44,7 @@ class AssessmentController:
             db_params = {
                 "user": "postgres",
                 "password": "root",
-                "database": "hr-management",
+                "database": "genius_factor",
                 "host": "localhost",
                 "port": 5432
             }
@@ -206,7 +206,7 @@ class AssessmentController:
             db_params = {
                 "user": "postgres",
                 "password": "root",
-                "database": "hr-management",
+                "database": "genius_factor",
                 "host": "localhost",
                 "port": 5432
             }

@@ -23,7 +23,7 @@ class LLMService:
     async def initialize_db(self):
         """Initialize database connection pool"""
         self.pool = await asyncpg.create_pool(
-            dsn="postgresql://postgres:root@localhost:5432/hr-management",
+            dsn="postgresql://postgres:root@localhost:5432/genius_factor",
             min_size=1,
             max_size=10
         )
