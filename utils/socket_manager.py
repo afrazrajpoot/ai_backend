@@ -27,6 +27,7 @@ def safe_serialize(obj):
         return obj
 
 # Create Socket.IO server with proper CORS configuration
+# FIXED Socket.IO server configuration  
 sio = socketio.AsyncServer(
     async_mode='asgi',
     cors_allowed_origins=[
@@ -38,22 +39,41 @@ sio = socketio.AsyncServer(
     ],
     logger=True,
     engineio_logger=True,
-    # Add these critical settings
-    compression=False,           # Disable Socket.IO compression
-    http_compression=False,      # Disable HTTP compression
-    max_http_buffer_size=10000000 # Increase buffer size for large payloads
+    # 🔥 CRITICAL FIXES FOR PAYLOAD ISSUES:
+    compression=False,              # Disable compression to avoid parse errors  
+    http_compression=False,         # Disable HTTP compression
+    max_http_buffer_size=50000000,  # Increase to 50MB (was 10MB)
+    ping_timeout=120000,            # Increase ping timeout to 2 minutes
+    ping_interval=25000,            # Ping every 25 seconds
+    connect_timeout=60000,          # 1 minute connection timeout
+    # Additional WebSocket settings
+    transports=['websocket', 'polling'],  # Prefer WebSocket
+    allow_upgrades=True,
+    cookie=False                    # Disable cookies for better performance
 )
+
 
 # Socket.IO event handlers
 @sio.event
 async def connect(sid, environ):
-    print(f"✅ Client connected: {sid}")
-    print(f"🌐 Origin: {environ.get('HTTP_ORIGIN')}")
-    return True # Accept the connection
+    try:
+        print(f"✅ Client connected: {sid}")
+        print(f"🌐 Origin: {environ.get('HTTP_ORIGIN')}")
+        return True
+    except Exception as e:
+        print(f"❌ Connection error: {e}")
+        return False
 
-@sio.event
+@sio.event  
 async def disconnect(sid):
     print(f"❌ Client disconnected: {sid}")
+    # Add cleanup logic here if needed
+
+
+    # Add this to handle connection errors
+@sio.event
+async def connect_error(sid, data):
+    print(f"🔥 Connection error for {sid}: {data}")
 
 @sio.event
 async def subscribe_notifications(sid, data):
