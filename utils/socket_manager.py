@@ -55,14 +55,17 @@ sio = socketio.AsyncServer(
         "https://api.geniusfactor.ai",
         "http://localhost:3000",
         "http://127.0.0.1:3000",
-        "http://localhost:8000", 
-        "http://127.0.0.1:8000",
     ],
     logger=True,
     engineio_logger=True,
     ping_timeout=60,
     ping_interval=25,
+    # Add these critical settings
+    compression=False,           # Disable Socket.IO compression
+    http_compression=False,      # Disable HTTP compression
+    max_http_buffer_size=10000000  # Increase buffer size for large payloads
 )
+
 
 # Socket.IO event handlers
 @sio.event
