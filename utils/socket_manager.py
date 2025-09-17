@@ -29,7 +29,7 @@ async def connect(sid, environ):
 
 @sio.event
 async def disconnect(sid):
-    print(f"❌ Client disconnected: {sid}")
+    print(f"❌ Client disconnected 123: {sid}")
 
 @sio.event
 async def subscribe_notifications(sid, data):
