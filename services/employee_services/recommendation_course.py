@@ -7,6 +7,7 @@ from typing import List
 from utils.models import ProgressTracking, RecommendedCourse
 from prisma import Prisma
 from langchain_community.tools.tavily_search import TavilySearchResults
+from config import settings
 
 class EmployeeService:
     def __init__(self, prisma: Prisma):
@@ -16,11 +17,8 @@ class EmployeeService:
             model_name="gpt-3.5-turbo",
             openai_api_key=os.getenv("OPENAI_API_KEY")
         )
-        self.search_tool = TavilySearchResults(
-            max_results=3,
-            api_key=os.getenv("TAVILY_API_KEY")
-        )
-        self.system_prompt = """You are a career development AI assistant. Provide 3-5 relevant online courses with real URLs from platforms like Coursera, Udemy, edX, or LinkedIn Learning."""
+        self.search_tool = TavilySearchResults(api_key=settings.TAVILY_API_KEY, max_results=10)  # Increased max_results
+        self.system_prompt = """You are a career development AI assistant. Provide relevant online courses with real URLs from platforms like Coursera, Udemy, edX, or LinkedIn Learning."""
 
     async def get_employee_data(self, user_id: str) -> dict:
         try:
@@ -66,111 +64,93 @@ class EmployeeService:
         return await self._get_course_recommendations(employee_profile)
 
     async def _get_course_recommendations(self, profile: dict) -> List[RecommendedCourse]:
-      
         try:
-            # Use LLM to generate relevant course topics based on profile
-            prompt = f"""
-            Based on this employee profile, suggest 3-5 relevant course topics or titles for skill development:
-            {json.dumps(profile, indent=2)}
-            Focus on courses from Udemy or Coursera only.
-            Return JSON: {{"topics": ["Topic 1", "Topic 2", ...]}}
-            """
-            response = await self.llm.agenerate([[
-                SystemMessage(content=self.system_prompt),
-                HumanMessage(content=prompt)
-            ]])
-            result = json.loads(response.generations[0][0].text)
-            topics = result["topics"]
+            # Compose a detailed search query using employee profile
+            skills = profile.get("current_skills", [])
+            position = profile.get("current_position", "")
+            department = profile.get("current_department", "")
+            name = profile.get("name", "")
 
-            # Search for courses using Tavily for each topic
+            # Build a single comprehensive search query for Tavily to get all relevant courses
+            search_query = (
+                f"best online courses for {position} professionals in {department} department "
+                f"focusing on skills: {', '.join(skills)} "
+                f"from Coursera, Udemy, edX, or LinkedIn Learning with direct URLs"
+            )
+            print(f"Single search query: {search_query}")  # Debug
+
+            # Search for courses using Tavily with one query
+            search_results = await self._search_courses(search_query)
+
+            # Remove duplicates based on URL
+            seen_urls = set()
+            unique_results = []
+            for result in search_results:
+                url = result.get("url", "")
+                if url not in seen_urls:
+                    seen_urls.add(url)
+                    unique_results.append(result)
+
             courses = []
-            for topic in topics:
-                search_query = f'"{topic}" course site:udemy.com OR site:coursera.org'
-                search_results = await self._search_courses(search_query)
-                if search_results:
-                    # Select the first relevant result
-                    best_result = search_results[0]
-                    course = RecommendedCourse(
-                        title=best_result.get("title", topic),
-                        provider="Udemy" if "udemy.com" in best_result.get("url", "") else "Coursera",
-                        url=best_result.get("url", ""),
-                        reason=f"Recommended for {topic} based on profile"
-                    )
-                    courses.append(course)
+            for result in unique_results:
+                url = result.get("url", "")
+                provider = (
+                    "Udemy" if "udemy.com" in url else
+                    "Coursera" if "coursera.org" in url else
+                    "edX" if "edx.org" in url else
+                    "LinkedIn Learning" if "linkedin.com/learning" in url else "Unknown"
+                )
+                course = RecommendedCourse(
+                    title=result.get("title", ""),
+                    provider=provider,
+                    url=url,
+                    reason=f"Recommended for {position} in {department} with skills {', '.join(skills)} based on web search"
+                )
+                courses.append(course)
 
-            # If fewer than 3 courses found, add defaults
-            if len(courses) < 3:
-                default_courses = [
-                    RecommendedCourse(
-                        title="Python Programming",
-                        provider="Coursera",
-                        url="https://www.coursera.org/specializations/python",
-                        reason="Foundation programming course"
-                    ),
-                    RecommendedCourse(
-                        title="Data Structures and Algorithms",
-                        provider="Udemy",
-                        url="https://www.udemy.com/course/data-structures-and-algorithms-deep-dive-using-java/",
-                        reason="Essential for developers"
-                    ),
-                    RecommendedCourse(
-                        title="Communication Skills",
-                        provider="Coursera",
-                        url="https://www.coursera.org/learn/communication-skills",
-                        reason="Improves career skills"
-                    )
-                ]
-                courses.extend(default_courses[:3 - len(courses)])
+            print(f"Found {len(courses)} unique courses from single web search query")  # Debug
+            print(f"Recommended courses: {[course.title for course in courses]}")  # Debug
 
-            return courses[:5]  # Limit to 5
+            return courses[:5]  # Return up to 5 courses from the single query
 
         except Exception as e:
-            # print(f"Course recommendation failed: {e}")
-            return [
-                RecommendedCourse(
-                    title="Python Programming",
-                    provider="Coursera",
-                    url="https://www.coursera.org/specializations/python",
-                    reason="Foundation programming course"
-                ),
-                RecommendedCourse(
-                    title="Data Structures and Algorithms",
-                    provider="Udemy",
-                    url="https://www.udemy.com/course/data-structures-and-algorithms-deep-dive-using-java/",
-                    reason="Essential for developers"
-                ),
-                RecommendedCourse(
-                    title="Communication Skills",
-                    provider="Coursera",
-                    url="https://www.coursera.org/learn/communication-skills",
-                    reason="Improves career skills"
-                )
-            ]
+            print(f"Course recommendation failed: {e}")  # Debug
+            # If search fails, return empty list; no static fallback
+            return []
 
     async def _search_courses(self, query: str) -> List[dict]:
         try:
-            # Use TavilySearchResults tool to get search results
-            results = self.search_tool.run(query)
-            # Parse the results - assuming it returns a list of dicts with title, url, etc.
+            # Debug: Verify API key
+            print(f"TAVILY_API_KEY: {'Set' if settings.TAVILY_API_KEY else 'Not set'}")
+
+            results = await self.search_tool.arun(query)
+            print(f"Tavily raw results (type: {type(results)}): {results}")
+
             if isinstance(results, str):
-                # If returns JSON string, parse it
-                import json
-                parsed_results = json.loads(results)
+                print("Tavily returned a string, attempting to parse as JSON")
+                try:
+                    parsed_results = json.loads(results)
+                except json.JSONDecodeError as json_err:
+                    print(f"JSON parsing error: {json_err}")
+                    return []
             else:
                 parsed_results = results
-            
+                print(f"Parsed results (type: {type(parsed_results)}): {parsed_results}")
+
             search_results = []
             for r in parsed_results:
                 if isinstance(r, dict) and "url" in r:
-                    # Filter for relevant domains
                     url = r["url"]
-                    if "udemy.com" in url or "coursera.org" in url:
+                    if any(platform in url for platform in ["udemy.com", "coursera.org", "edx.org", "linkedin.com/learning"]):
                         search_results.append({
                             "title": r.get("title", ""),
                             "url": url
                         })
-            
+                else:
+                    print(f"Skipping invalid result: {r}")
+
+            print(f"Filtered course results for the query: {search_results}")
             return search_results
         except Exception as e:
-            # print(f"Tavily search failed: {e}")
+            print(f"Tavily search failed: {type(e).__name__}: {str(e)}")
             return []
