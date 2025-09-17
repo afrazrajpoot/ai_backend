@@ -1,32 +1,36 @@
 import socketio
 from prisma import Prisma
-import numpy as np
-import pandas as pd
 from datetime import datetime, timedelta, timezone
 import json
+import math, numpy as np, pandas as pd
+from json import dumps
 
 def safe_serialize(obj):
-    """Convert pandas/numpy objects to JSON-serializable types"""
-    if isinstance(obj, (np.integer, np.int64)):
+    # ----- scalars ------------------------------------------------
+    if isinstance(obj, (np.integer,)):
         return int(obj)
-    elif isinstance(obj, (np.floating, np.float64)):
-        return float(obj)
-    elif isinstance(obj, np.ndarray):
-        return obj.tolist()
-    elif isinstance(obj, pd.Series):
-        return obj.tolist()
-    elif isinstance(obj, pd.Timestamp):
-        return obj.isoformat()
-    elif isinstance(obj, datetime):
-        return obj.isoformat()
-    elif isinstance(obj, dict):
-        return {k: safe_serialize(v) for k, v in obj.items()}
-    elif isinstance(obj, (list, tuple)):
-        return [safe_serialize(item) for item in obj]
-    else:
-        return obj
 
-# Create Socket.IO server with proper CORS configuration
+    if isinstance(obj, (np.floating, float)):
+        # ✨ CRITICAL: clean NaN / ±Inf
+        return None if (math.isnan(obj) or math.isinf(obj)) else float(obj)
+
+    # ----- sequences ---------------------------------------------
+    if isinstance(obj, (np.ndarray, list, tuple)):
+        return [safe_serialize(x) for x in obj]
+
+    if isinstance(obj, pd.Series):
+        return [safe_serialize(x) for x in obj.tolist()]
+
+    # ----- datetimes ---------------------------------------------
+    if isinstance(obj, (pd.Timestamp, datetime)):
+        return obj.isoformat()
+
+    # ----- mappings ----------------------------------------------
+    if isinstance(obj, dict):
+        return {k: safe_serialize(v) for k, v in obj.items()}
+
+    return obj
+
 # FIXED Socket.IO server configuration  
 sio = socketio.AsyncServer(
     async_mode='asgi',
@@ -52,7 +56,6 @@ sio = socketio.AsyncServer(
     cookie=False                    # Disable cookies for better performance
 )
 
-
 # Socket.IO event handlers
 @sio.event
 async def connect(sid, environ):
@@ -67,13 +70,11 @@ async def connect(sid, environ):
 @sio.event  
 async def disconnect(sid):
     print(f"❌ Client disconnected: {sid}")
-    # Add cleanup logic here if needed
 
-
-    # Add this to handle connection errors
 @sio.event
 async def connect_error(sid, data):
     print(f"🔥 Connection error for {sid}: {data}")
+
 
 @sio.event
 async def subscribe_notifications(sid, data):
