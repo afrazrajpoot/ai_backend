@@ -41,8 +41,8 @@ sio = socketio.AsyncServer(
         "http://localhost:3000",
         "http://127.0.0.1:3000",
     ],
-    logger=True,
-    engineio_logger=True,
+    # logger=True,
+    # engineio_logger=True,
     # 🔥 CRITICAL FIXES FOR PAYLOAD ISSUES:
     compression=False,              # Disable compression to avoid parse errors  
     http_compression=False,         # Disable HTTP compression
@@ -60,11 +60,10 @@ sio = socketio.AsyncServer(
 @sio.event
 async def connect(sid, environ):
     try:
-        print(f"✅ Client connected: {sid}")
-        print(f"🌐 Origin: {environ.get('HTTP_ORIGIN')}")
+    
         return True
     except Exception as e:
-        print(f"❌ Connection error: {e}")
+  
         return False
 
 @sio.event  
@@ -80,12 +79,12 @@ async def connect_error(sid, data):
 async def subscribe_notifications(sid, data):
     """Subscribe to notifications"""
     try:
-        print(f"📨 Subscription request from {sid}: {data}")
+   
         
         if data.get('user_id'):
             room_id = f"user_{data['user_id']}"
             await sio.enter_room(sid, room_id)
-            print(f"👤 User {data['user_id']} joined room: {room_id}")
+         
             
             clients_in_room = 0
             if hasattr(sio, 'manager') and room_id in sio.manager.rooms:
@@ -102,7 +101,7 @@ async def subscribe_notifications(sid, data):
         elif data.get('channel'):
             room_id = f"channel_{data['channel']}"
             await sio.enter_room(sid, room_id)
-            print(f"📢 Client joined channel: {data['channel']}")
+      
             
             response_data = {
                 'message': f'Subscribed to channel {data["channel"]}',
@@ -312,7 +311,7 @@ async def hr_dashboard(sid, data):
         
         # Emit the comprehensive dashboard data
         await sio.emit('reports_info', safe_response, to=sid)
-        print(f"✅ Dashboard data sent successfully for HR {hr_id}")
+    
 
     except Exception as e:
         error_msg = f"Error in hr_dashboard: {str(e)}"
@@ -493,7 +492,7 @@ async def internal_mobility(sid, data):
         
         # Emit the mobility data
         await sio.emit('mobility_info', safe_response, to=sid)
-        print(f"✅ Mobility data sent successfully for HR {hr_id}")
+   
 
     except Exception as e:
         error_msg = f"Error in internal_mobility: {str(e)}"
@@ -907,7 +906,7 @@ async def admin_dashboard(sid, data):
         
         # Emit the admin dashboard data
         await sio.emit('reports_info', safe_response, to=sid)
-        print(f"✅ Admin dashboard data sent: {total_reports} reports, {df['employee_id'].nunique()} employees, {len(unique_hr_ids)} HR IDs, {len(unique_departments)} departments")
+
 
     except Exception as e:
         error_msg = f"Error in admin_dashboard: {str(e)}"
@@ -1087,8 +1086,7 @@ async def admin_internal_mobility_analysis(sid, data):
                             hr_stats[hr_id]['departments'][dept_name]['transfers'] += 1
 
             # Log what we found (for debugging)
-            if dept_ingoing_count > 0 or dept_outgoing_count > 0:
-                print(f"📊 {dept_name}: {dept_ingoing_count} ingoing, {dept_outgoing_count} outgoing")
+   
 
         # Convert monthly trends to sorted list format
         monthly_trends_list = []
@@ -1147,8 +1145,7 @@ async def admin_internal_mobility_analysis(sid, data):
 
         safe_response = safe_serialize(response_data)
         await sio.emit('mobility_analysis', safe_response, to=sid)
-        print(f"✅ Analysis complete - {total_incoming} incoming, {total_outgoing} outgoing")
-        print(f"   📈 Ingoing arrays: {total_ingoing_array_count}, Outgoing arrays: {total_outgoing_array_count}")
+  
 
     except Exception as e:
         error_msg = f"Error: {str(e)}"
@@ -1305,7 +1302,7 @@ async def department_analysis(sid, data):
         safe_response = safe_serialize(response_data)
         
         await sio.emit('department_info', safe_response, to=sid)
-        print(f"✅ Department analysis sent successfully for HR {hr_id}")
+     
 
     except Exception as e:
         error_msg = f"Error in department_analysis: {str(e)}"

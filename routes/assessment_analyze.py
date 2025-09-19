@@ -6,5 +6,5 @@ router = APIRouter(prefix="/analyze", tags=["Analyze"])
 
 @router.post("/assessment")
 async def analyze_route(assessment_data: AssessmentData):
-    # print(assessment_data,'assessment data in route')
+   
     return await AssessmentController.analyze_assessment(assessment_data)

@@ -77,7 +77,7 @@ class EmployeeService:
                 f"focusing on skills: {', '.join(skills)} "
                 f"from Coursera, Udemy, edX, or LinkedIn Learning with direct URLs"
             )
-            print(f"Single search query: {search_query}")  # Debug
+        
 
             # Search for courses using Tavily with one query
             search_results = await self._search_courses(search_query)
@@ -108,34 +108,33 @@ class EmployeeService:
                 )
                 courses.append(course)
 
-            print(f"Found {len(courses)} unique courses from single web search query")  # Debug
-            print(f"Recommended courses: {[course.title for course in courses]}")  # Debug
+      
 
             return courses[:5]  # Return up to 5 courses from the single query
 
         except Exception as e:
-            print(f"Course recommendation failed: {e}")  # Debug
+        
             # If search fails, return empty list; no static fallback
             return []
 
     async def _search_courses(self, query: str) -> List[dict]:
         try:
             # Debug: Verify API key
-            print(f"TAVILY_API_KEY: {'Set' if settings.TAVILY_API_KEY else 'Not set'}")
+        
 
             results = await self.search_tool.arun(query)
-            print(f"Tavily raw results (type: {type(results)}): {results}")
+        
 
             if isinstance(results, str):
-                print("Tavily returned a string, attempting to parse as JSON")
+             
                 try:
                     parsed_results = json.loads(results)
                 except json.JSONDecodeError as json_err:
-                    print(f"JSON parsing error: {json_err}")
+                
                     return []
             else:
                 parsed_results = results
-                print(f"Parsed results (type: {type(parsed_results)}): {parsed_results}")
+           
 
             search_results = []
             for r in parsed_results:
@@ -149,8 +148,8 @@ class EmployeeService:
                 else:
                     print(f"Skipping invalid result: {r}")
 
-            print(f"Filtered course results for the query: {search_results}")
+        
             return search_results
         except Exception as e:
-            print(f"Tavily search failed: {type(e).__name__}: {str(e)}")
+         
             return []

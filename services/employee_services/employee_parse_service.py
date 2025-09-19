@@ -55,9 +55,7 @@ async def parse_and_save_employees(file, hr_id: str):
         raise ValueError("File has no rows")
 
     # --- Debug ---
-    # print("[DEBUG] Number of rows:", len(rows))
-    # print("[DEBUG] Columns detected:", rows[0].keys())
-    # print("[DEBUG] First 5 rows:")
+ 
     for r in rows[:5]:
         print(r)
 
@@ -68,13 +66,13 @@ async def parse_and_save_employees(file, hr_id: str):
     for idx, row in enumerate(rows):
         email = str(row.get("email", "")).strip().lower()
         if not email:
-            # print(f"[WARNING] Row {idx+1} missing email. Skipping.")
+        
 
             continue
 
         existing_user = await db.user.find_first(where={"email": email})
         if existing_user:
-            # print(f"[INFO] Row {idx+1}: User with email {email} already exists. Skipping.")
+       
             continue
 
         try:
@@ -117,11 +115,11 @@ async def parse_and_save_employees(file, hr_id: str):
                             "hrId": hr_id,
                         }
                     )
-                    # print(f"[INFO] Department {dept_name} added for user {employee.email}")
+               
                 except Exception as e:
                     # Handle the exception
                     pass
-                    # print(f"[ERROR] Failed to add department for {employee.email}: {e}")
+              
 
             # --- Append to return list ---
             inserted_employees.append({
@@ -131,9 +129,9 @@ async def parse_and_save_employees(file, hr_id: str):
                 "email": employee.email,
                 "position": employee.position
             })
-            # print(f"[INFO] Row {idx+1} inserted: {employee.email}")
+       
         except Exception as e:
-            # print(f"[ERROR] Failed to insert row {idx+1}: {e}")
+         
             raise ValueError(f"Failed to insert row {idx+1}: {e}")
 
     await db.disconnect()

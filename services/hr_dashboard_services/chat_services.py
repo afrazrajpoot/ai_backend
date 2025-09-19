@@ -30,15 +30,15 @@ class ChatService:
                 "host": "localhost",
                 "port": 5432
             }
-            logger.info(f"Connecting to database: {db_params['host']}:{db_params['port']}/{db_params['database']}")
+
 
             # Connect to database using db_params
             self.pool = await asyncpg.create_pool(**db_params)
             async with self.pool.acquire() as connection:
                 await connection.execute("SET search_path TO public")
-            # print("Database connection established successfully")
+          
         except Exception as e:
-            # print(f"Database connection error: {e}")
+         
 
             raise
 

@@ -86,18 +86,18 @@ class AIService:
 
         if not force_rebuild and cls._check_index_validity(faiss_path, pdf_files):
             try:
-                logger.info("Loading existing FAISS index...")
+             
                 cls._vector_store = FAISS.load_local(
                     faiss_path,
                     embeddings,
                     allow_dangerous_deserialization=True
                 )
-                logger.info("✅ Vector store loaded from existing index")
+           
                 return cls._vector_store
             except Exception as e:
                 logger.warning(f"Failed to load existing index: {e}. Rebuilding...")
 
-        logger.info("Creating new FAISS index from PDFs...")
+     
         all_chunks = []
         text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=1500,
@@ -111,14 +111,14 @@ class AIService:
                 logger.warning(f"PDF file not found: {pdf_file}")
                 continue
             try:
-                logger.info(f"Processing PDF {i}/{len(pdf_files)}: {os.path.basename(pdf_file)}")
+         
                 loader = PyPDFLoader(pdf_file)
                 documents = loader.load()
                 chunks = text_splitter.split_documents(documents)
                 for chunk in chunks:
                     chunk.metadata['source_file'] = os.path.basename(pdf_file)
                 all_chunks.extend(chunks)
-                logger.info(f"  ✅ Added {len(chunks)} chunks from {os.path.basename(pdf_file)}")
+         
             except Exception as e:
                 logger.error(f"Error loading {pdf_file}: {str(e)}")
                 continue
@@ -126,15 +126,14 @@ class AIService:
         if not all_chunks:
             raise ValueError("No documents were loaded from PDF files")
 
-        logger.info(f"Creating embeddings for {len(all_chunks)} total chunks...")
+    
         try:
             cls._vector_store = FAISS.from_documents(all_chunks, embeddings)
             cls._vector_store.save_local(faiss_path)
             current_hash = cls._get_pdf_files_hash(pdf_files)
             with open(f"{faiss_path}.hash", 'w') as f:
                 f.write(current_hash)
-            logger.info("✅ Vector store created and saved successfully")
-            logger.info(f"📊 Total chunks indexed: {len(all_chunks)}")
+       
         except Exception as e:
             logger.error(f"Failed to create vector store: {str(e)}")
             raise
@@ -238,7 +237,7 @@ class AIService:
         # Retrieve top 1 document from each source using the corresponding query and metadata filter
         all_docs = []
         for query, source_basename in query_source_pairs:
-            logger.info(f"Searching in {source_basename} for: {query}")
+         
             retriever = vector_store.as_retriever(
                 search_type="similarity",
                 search_kwargs={"k": 1, "filter": {"source_file": source_basename}}
@@ -255,7 +254,7 @@ class AIService:
             page = doc.metadata.get('page', 0)
             result_text += f"Document {i} - Source: {source} (Page {page})\nContent: {content}\n\n"
 
-        logger.info(f"Retrieved {len(all_docs)} documents (one from each source)")
+     
         return result_text
     @classmethod
     async def generate_career_recommendation(cls, analysis_result: str, all_answers: Any) -> Dict[str, Any]:
@@ -294,8 +293,7 @@ class AIService:
 
             # Render and log the full prompt
             full_prompt_str = report_prompt.format(analysis_data=analysis_result)
-            # logger.debug(f"Full prompt sent to LLM:\n{full_prompt_str}")
-            # print(f"\n===== FULL PROMPT TO LLM =====\n{full_prompt_str}\n==============================\n")
+       
         
             chain = report_prompt | llm | parser
             output = await chain.ainvoke({"analysis_data": analysis_result})
@@ -390,7 +388,7 @@ class AIService:
                         except Exception as e:
                             logger.warning(f"Retention query failed for '{query}': {e}")
                             continue
-                    logger.info(f"Retention search found {len(search_results)} results")
+                  
                 except Exception as e:
                     logger.error(f"Retention search error: {e}")
                     search_results = [{
@@ -419,7 +417,7 @@ class AIService:
                         except Exception as e:
                             logger.warning(f"Mobility query failed for '{query}': {e}")
                             continue
-                    logger.info(f"Mobility search found {len(search_results)} results")
+                 
                 except Exception as e:
                     logger.error(f"Mobility search error: {e}")
                     search_results = [{

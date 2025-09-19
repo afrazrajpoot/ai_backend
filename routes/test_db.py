@@ -19,7 +19,7 @@ async def test_database_save(request: TestReportRequest):
     Test endpoint for saving assessment report to database
     """
     try:
-        logger.info(f"Test DB save endpoint called for user: {request.userId}")
+   
         
         # Prepare assessment data in the same format as the main endpoint
         assessment_data = {
@@ -31,8 +31,7 @@ async def test_database_save(request: TestReportRequest):
         }
         
         # Log the incoming data structure
-        logger.info(f"Assessment data keys: {list(assessment_data.keys())}")
-        logger.info(f"Report keys: {list(request.report.keys())}")
+
         
         # Try to save to database
         db_response = await AssessmentController.save_to_database(assessment_data)
@@ -62,8 +61,7 @@ async def test_database_save_simple(data: Dict[str, Any]):
     Simple test endpoint that accepts any JSON and tries to save it
     """
     try:
-        logger.info("Simple test DB save endpoint called")
-        logger.info(f"Received data keys: {list(data.keys())}")
+   
         
         # Create minimal test data if userId not provided
         if "userId" not in data:

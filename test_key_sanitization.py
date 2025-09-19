@@ -101,7 +101,7 @@ def test_key_sanitization():
         print(f"\n❌ STILL FOUND PROBLEMATIC KEYS: {problematic_keys}")
         return False
     else:
-        print("\n✅ ALL KEYS ARE NOW-COMPATIBLE!")
+     
         return True
 
 if __name__ == "__main__":

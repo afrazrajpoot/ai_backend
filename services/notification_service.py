@@ -27,7 +27,7 @@ class NotificationService:
             room_name = f"user_{user_id}"
             await sio.emit('notification', full_notification, room=room_name)
             await sio.emit('hr_notification', full_notification, room=f"user_{hr_id}")
-            logger.info(f"Notification sent to user {user_id}: {notification_data.get('message')}")
+        
             
         except Exception as e:
             logger.error(f"Error sending notification to user {user_id}: {str(e)}")
@@ -48,7 +48,7 @@ class NotificationService:
                 'timestamp': notification_data['timestamp']
             }, room=f"channel_{channel}")
             
-            logger.info(f"Notification sent to channel {channel}: {notification_data.get('message')}")
+
             
         except Exception as e:
             logger.error(f"Error sending notification to channel {channel}: {str(e)}")
@@ -68,7 +68,7 @@ class NotificationService:
                 'timestamp': notification_data['timestamp']
             })
             
-            logger.info(f"Broadcast notification: {notification_data.get('message')}")
+        
             
         except Exception as e:
             logger.error(f"Error sending broadcast notification: {str(e)}")

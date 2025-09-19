@@ -77,7 +77,7 @@ class JobVectorStore:
         if os.path.exists(index_file) and os.path.exists(pkl_file):
             try:
                 self.vs = FAISS.load_local(INDEX_DIR, self.embeddings, allow_dangerous_deserialization=True)
-                logger.info("Loaded FAISS index from disk")
+             
                 self._loaded = True
                 return
             except Exception as e:
@@ -88,12 +88,11 @@ class JobVectorStore:
                         os.remove(index_file)
                     if os.path.exists(pkl_file):
                         os.remove(pkl_file)
-                    logger.info("Removed corrupted FAISS index files")
+                  
                 except Exception as cleanup_error:
                     logger.warning(f"Failed to cleanup corrupted files: {cleanup_error}")
 
-        # Build from DB
-        logger.info("Building FAISS index from database...")
+
         jobs = await db.job.find_many()
         docs: List[Document] = [self._job_to_document(JobRow(
             id=j.id,
@@ -106,15 +105,15 @@ class JobVectorStore:
 
         if not docs:
             self.vs = FAISS.from_texts(["NO_JOBS"], self.embeddings, metadatas=[{"placeholder": True}])
-            logger.info("Created placeholder FAISS index (no jobs found)")
+          
         else:
             self.vs = FAISS.from_documents(docs, self.embeddings)
-            logger.info(f"Created FAISS index with {len(docs)} documents")
+    
 
         # Save the index
         try:
             self.vs.save_local(INDEX_DIR)
-            logger.info("FAISS index built and saved to disk")
+       
         except Exception as e:
             logger.error(f"Failed to save FAISS index: {e}")
             # Continue anyway since we have the index in memory
@@ -345,7 +344,7 @@ class JobRecommendationService:
             retrieved_docs = self.vstore.retrieve_jobs(query_text, recruiter_id, k=TOP_K)
             
             if not retrieved_docs:
-                logger.info("No jobs retrieved for this recruiter")
+             
                 return []
             
             # Calculate similarity scores

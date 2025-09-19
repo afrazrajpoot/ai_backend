@@ -27,7 +27,7 @@ class LLMService:
             min_size=1,
             max_size=10
         )
-        logger.info("✅ Database connection pool ready")
+      
 
     async def save_analysis_result(
         self,
@@ -49,7 +49,7 @@ class LLMService:
                 json.dumps(ai_response),
                 risk_score
             )
-        logger.info(f"✅ Saved analysis for HRID={hrid}, Dept={department_name}")
+
 
     async def analyze_retention_risk(self, departments_data: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Analyze retention risk using LLM"""
@@ -106,7 +106,7 @@ class LLMService:
         return result
 
     async def analyze_and_save_retention_risk(self, departments_data: List[Dict[str, Any]]) -> Dict[str, Any]:
-        # print(departments_data,'my department data')
+
         """
         Analyze retention risk and save results to database for each department
         """
@@ -143,4 +143,4 @@ class LLMService:
         """Close database connection pool"""
         if self.pool:
             await self.pool.close()
-            logger.info("✅ Database connection closed")
+          

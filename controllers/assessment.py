@@ -7,7 +7,7 @@ class AssessmentController:
     @staticmethod
     async def assess_employee(input_data: AssessInput):
         try:
-            logger.info(f"Processing assessment for userId: {input_data.userId}")
+       
             
             # Get AI assessment
             assessment_result = await AIService.generate_assessment(input_data.answers)
