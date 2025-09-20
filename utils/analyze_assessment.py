@@ -1,4 +1,5 @@
 
+
 from typing import List, Optional
 from schemas.assessment import AssessmentPart
 def analyze_assessment_data(data: List[AssessmentPart]):

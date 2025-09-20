@@ -216,12 +216,12 @@ class AIService:
         secondary_name = get_genius_name(secondary_letter)
         genius_factors = [primary_name, secondary_name]
 
-        # Define queries tailored to each PDF source
+        # Updated queries to retrieve ALL data containing the genius factor names
         queries = [
-            f"Genius factor definitions and characteristics for {primary_name} and {secondary_name}",
-            f"Primary and secondary industries for genius factors {', '.join(genius_factors)}",
-            f"Content from Genius Factor Framework Analysis of {', '.join(genius_factors)}",
-            f"Get all data Employee Mobility and Retention Research Findings for {', '.join(genius_factors)}"
+            f'"{primary_name}" OR "{secondary_name}"',  # Get all documents containing either genius factor name
+            f'"{primary_name}" OR "{secondary_name}"',  # Same for industry mapping
+            f'"{primary_name}" OR "{secondary_name}"',  # Same for framework analysis
+            f'"{primary_name}" OR "{secondary_name}"'   # Same for retention research
         ]
 
         # Map queries to source files (basenames)
@@ -234,28 +234,39 @@ class AIService:
 
         query_source_pairs = list(zip(queries, source_files))
 
-        # Retrieve top 1 document from each source using the corresponding query and metadata filter
+        # Retrieve ALL relevant documents from each source using the corresponding query and metadata filter
         all_docs = []
         for query, source_basename in query_source_pairs:
-         
             retriever = vector_store.as_retriever(
                 search_type="similarity",
-                search_kwargs={"k": 1, "filter": {"source_file": source_basename}}
+                search_kwargs={"k": 1000, "filter": {"source_file": source_basename}}  # High k to get all possible docs
             )
             docs = await retriever.aget_relevant_documents(query)
             if docs:
-                all_docs.append(docs[0])
+                all_docs.extend(docs)
+                print(f"Retrieved {len(docs)} documents from {source_basename}")
+
+        # Remove duplicates based on content and source to avoid repetition
+        unique_docs = []
+        seen_content = set()
+        for doc in all_docs:
+            content_hash = hash(doc.page_content[:500] + doc.metadata.get('source_file', ''))
+            if content_hash not in seen_content:
+                seen_content.add(content_hash)
+                unique_docs.append(doc)
 
         # Format retrieved data as plain text
-        result_text = f"Genius Factors Identified:\nPrimary: {primary_name} ({primary_letter})\nSecondary: {secondary_name} ({secondary_letter})\n\nResponses:\n{all_responses}\nRetrieved Information:\n"
-        for i, doc in enumerate(all_docs, 1):
-            content = doc.page_content.replace('\n', ' ').strip()[:1500]
+        result_text = f"Genius Factors Identified:\nPrimary: {primary_name} ({primary_letter})\nSecondary: {secondary_name} ({secondary_letter})\n\n"
+        result_text += f"Total Documents Retrieved: {len(unique_docs)}\n\nResponses:\n{all_responses}\n\nRetrieved Information:\n"
+        
+        for i, doc in enumerate(unique_docs, 1):
+            content = doc.page_content.replace('\n', ' ').strip()
             source = doc.metadata.get('source_file', 'unknown')
             page = doc.metadata.get('page', 0)
-            result_text += f"Document {i} - Source: {source} (Page {page})\nContent: {content}\n\n"
+            result_text += f"=== Document {i} ===\nSource: {source} (Page {page})\nContent: {content}\n\n"
 
-     
         return result_text
+    
     @classmethod
     async def generate_career_recommendation(cls, analysis_result: str, all_answers: Any) -> Dict[str, Any]:
         try:
@@ -293,7 +304,7 @@ class AIService:
 
             # Render and log the full prompt
             full_prompt_str = report_prompt.format(analysis_data=analysis_result)
-       
+            print(f"Full prompt:\n{full_prompt_str}")
         
             chain = report_prompt | llm | parser
             output = await chain.ainvoke({"analysis_data": analysis_result})
