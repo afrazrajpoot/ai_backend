@@ -16,6 +16,7 @@ import operator
 from utils.logger import logger
 from config import settings
 from utils.models import IndividualEmployeeReport
+from utils.analysis_utils import MAPPING_FACTORS
 import asyncio
 class AIService:
     _prompts = None
@@ -156,75 +157,266 @@ class AIService:
             }
         except Exception as e:
             return {"status": "error", "error": str(e)}
+    # inside your ai_service class (replace existing analyze_majority_answers)
     @classmethod
-    async def analyze_majority_answers(cls, majority_results: List[Dict[str, Any]]) -> str:
+    async def analyze_majority_answers(cls, basic_results: List[Dict[str, Any]], deep_results: Dict[str,Any] = None) -> str:
+        """
+        Enhanced RAG step: prefer deep_results primary/secondary; fallback to basic_results.
+        Returns formatted text (or any structure you prefer).
+        """
         vector_store = cls.initialize_vector_store()
-        genius_factors = []
-        all_responses = ""
-        factor_counts_part_iv = {}
-        all_response_letters = set()
+        # Determine primary/secondary names
+        primary_name = None
+        secondary_name = None
+        hybrid_classification = None
+        confidence_level = None
+        alignment_label = None
+        current_role_alignment_label = None
 
-        # Collect responses and identify genius factors from all parts
-        for part in majority_results:
-            part_name = part['part']
-            responses = part.get('majorityOptions', [])
-            all_responses += f"Part: {part_name}\nResponses: {', '.join(responses)}\nMax Count: {part.get('maxCount', 0)}\n\n"
-            # Track responses from Part IV specifically
-            if part_name == "Part IV: Genius Factor Mapping Assessment":
-                for response in responses:
-                    factor_counts_part_iv[response] = factor_counts_part_iv.get(response, 0) + part.get('maxCount', 0)
-            # Collect all response letters across parts for secondary factor fallback
-            all_response_letters.update(responses)
-
-        # Determine primary and secondary genius factors (letters)
-        sorted_factors = sorted(factor_counts_part_iv.items(), key=lambda x: x[1], reverse=True)
-        if not sorted_factors:
-            # If no Part IV responses, use the most frequent letter from other parts
-            all_counts = {}
-            for part in majority_results:
-                for response in part.get('majorityOptions', []):
-                    all_counts[response] = all_counts.get(response, 0) + part.get('maxCount', 0)
-            sorted_all = sorted(all_counts.items(), key=lambda x: x[1], reverse=True)
-            primary_letter = sorted_all[0][0] if sorted_all else 'A'  # Default to 'A' if no responses
-            secondary_letter = sorted_all[1][0] if len(sorted_all) > 1 else 'A'
-        else:
-            primary_letter = sorted_factors[0][0]
-            # Select secondary letter: prefer Part IV, then other parts, then default
-            if len(sorted_factors) > 1:
-                secondary_letter = sorted_factors[1][0]
+        if deep_results:
+            prim = deep_results.get("primary_genius", [])
+            sec = deep_results.get("secondary_genius", [])
+            if prim:
+                primary_name = prim[0].get("name")
+                primary_qualities = prim[0].get("qualities", [])
             else:
-                # Look for other responses in Part IV or other parts
-                other_letters = all_response_letters - {primary_letter}
-                secondary_letter = next(iter(other_letters), 'A')  # Default to 'A' if no other letters
+                primary_qualities = []
+            if sec:
+                secondary_name = sec[0].get("name")
+                secondary_qualities = sec[0].get("qualities", [])
+            else:
+                secondary_qualities = []
+            hybrid_classification = deep_results.get("hybrid_classification")
+            hybrid_qualities = deep_results.get("hybrid_qualities", [])
+            confidence_level = deep_results.get("confidence_level")
+            alignment_label = deep_results.get("talent_passion_alignment_label")
+            # --- Current Role Alignment Calculation (Dynamic) ---
+            import logging
+            import random
+            logger = logging.getLogger("ai_service")
+            
+            # Get user's current role from multiple sources
+            current_role = (deep_results.get("departement") or 
+                          deep_results.get("department") or 
+                          deep_results.get("current_role") or
+                          "Unknown Role")
+            logger.info(f"[RoleAlign] Analyzing alignment for role: {current_role}")
+            
+            # Get user's genius factor profile from mapping counts
+            mapping_counts = deep_results.get("section_counts", {}).get("Mapping", {})
+            mapping_total = sum(mapping_counts.values()) or 1
+            user_profile = {k: v / mapping_total for k, v in mapping_counts.items()}
+            logger.info(f"[RoleAlign] User genius profile: {user_profile}")
+            
+            # Enhanced role-to-genius mapping that includes secondary factors
+            def get_expected_genius_profile(role_text):
+                """Dynamically determine expected genius factors for a role, including secondary factors"""
+                role_lower = role_text.lower()
+                
+                # Tech roles - expect high A (Tech Genius), with F (Number Genius) as valuable secondary
+                if any(word in role_lower for word in ['engineer', 'developer', 'programmer', 'software', 'data', 'analyst', 'tech']):
+                    return {
+                        "A": 0.45,  # Primary Tech Genius
+                        "F": 0.25,  # Secondary Number Genius (important for technical roles)
+                        "B": 0.12,  # Some business acumen
+                        "C": 0.08,  # Some creative thinking
+                        "D": 0.06,  # Communication skills
+                        "E": 0.04   # Operations understanding
+                    }
+                
+                # Business/Management roles - expect high B (Business Genius)
+                elif any(word in role_lower for word in ['manager', 'director', 'executive', 'business', 'lead', 'supervisor']):
+                    return {
+                        "B": 0.40,  # Primary Business Genius
+                        "D": 0.20,  # Communication crucial
+                        "A": 0.15,  # Tech understanding
+                        "E": 0.15,  # Operations/Strategic
+                        "C": 0.10   # Some creativity
+                    }
+                
+                # Creative roles - expect high C (Creative Genius)
+                elif any(word in role_lower for word in ['designer', 'artist', 'creative', 'marketing', 'brand']):
+                    return {
+                        "C": 0.45,  # Primary Creative Genius
+                        "D": 0.20,  # Communication important
+                        "A": 0.15,  # Tech skills valuable
+                        "B": 0.15,  # Business understanding
+                        "E": 0.05   # Operations
+                    }
+                
+                # Service/Support roles - expect high D (Service Genius)
+                elif any(word in role_lower for word in ['support', 'customer', 'service', 'hr', 'human']):
+                    return {
+                        "D": 0.40,  # Primary Service Genius
+                        "B": 0.25,  # Business skills important
+                        "A": 0.15,  # Tech understanding helpful
+                        "E": 0.12,  # Process orientation
+                        "C": 0.08   # Some creativity
+                    }
+                
+                # Operations/Strategic roles - expect high E (Strategic Genius)
+                elif any(word in role_lower for word in ['operations', 'strategy', 'planning', 'consultant']):
+                    return {
+                        "E": 0.40,  # Primary Strategic Genius
+                        "B": 0.25,  # Business acumen crucial
+                        "A": 0.15,  # Analytical skills
+                        "D": 0.12,  # Communication
+                        "C": 0.08   # Innovation thinking
+                    }
+                
+                # Sales roles - mix of B and D with communication focus
+                elif any(word in role_lower for word in ['sales', 'account']):
+                    return {
+                        "D": 0.35,  # Primary Communication
+                        "B": 0.30,  # Business skills
+                        "E": 0.15,  # Strategic thinking
+                        "A": 0.12,  # Tech understanding
+                        "C": 0.08   # Creative approach
+                    }
+                
+                # Healthcare roles - mix of D and B with service focus
+                elif any(word in role_lower for word in ['healthcare', 'medical', 'nurse', 'doctor']):
+                    return {
+                        "D": 0.35,  # Service/Communication
+                        "B": 0.25,  # Management/Business
+                        "A": 0.20,  # Analytical/Systems thinking
+                        "E": 0.15,  # Process optimization
+                        "C": 0.05   # Creative problem solving
+                    }
+                
+                # Default balanced profile for unknown roles
+                else:
+                    return {"A": 0.20, "B": 0.20, "C": 0.20, "D": 0.20, "E": 0.20}
+            
+            expected_profile = get_expected_genius_profile(current_role)
+            logger.info(f"[RoleAlign] Expected genius profile for '{current_role}': {expected_profile}")
+            
+            # Enhanced alignment calculation considering primary, secondary, and hybrid factors
+            current_role_alignment_pct = None
+            current_role_alignment_risk = "Unknown"
+            
+            if user_profile and expected_profile:
+                # Get user's primary and secondary genius factors
+                prim = deep_results.get("primary_genius", [])
+                sec = deep_results.get("secondary_genius", [])
+                hybrid_classification = deep_results.get("hybrid_classification")
+                
+                # Method 1: Traditional weighted overlap (base score)
+                base_alignment_score = 0.0
+                total_expected_weight = 0.0
+                
+                for genius_letter, expected_weight in expected_profile.items():
+                    user_weight = user_profile.get(genius_letter, 0)
+                    alignment_contribution = min(user_weight, expected_weight)
+                    base_alignment_score += alignment_contribution
+                    total_expected_weight += expected_weight
+                
+                base_alignment_pct = (base_alignment_score / total_expected_weight) * 100 if total_expected_weight > 0 else 0
+                logger.info(f"[RoleAlign] Base alignment score: {base_alignment_pct:.1f}%")
+                
+                # Method 2: Bonus for primary/secondary genius alignment
+                genius_alignment_bonus = 0.0
+                
+                if prim:
+                    primary_letter = prim[0].get("letter", "")
+                    primary_strength = prim[0].get("percentage", 0)
+                    expected_primary_weight = expected_profile.get(primary_letter, 0)
+                    
+                    if expected_primary_weight > 0:
+                        # Bonus based on how well primary genius aligns with role expectations
+                        # Scaled to avoid over-scoring: max 15% bonus for perfect primary alignment
+                        primary_bonus = min(0.15, (expected_primary_weight * 0.4) * (primary_strength / 100))
+                        genius_alignment_bonus += primary_bonus
+                        logger.info(f"[RoleAlign] Primary genius bonus: {primary_bonus:.3f} (letter: {primary_letter}, strength: {primary_strength}%, expected: {expected_primary_weight:.2f})")
+                
+                if sec:
+                    secondary_letter = sec[0].get("letter", "")
+                    secondary_strength = sec[0].get("percentage", 0)
+                    expected_secondary_weight = expected_profile.get(secondary_letter, 0)
+                    
+                    if expected_secondary_weight > 0:
+                        # Bonus for secondary genius alignment (weighted lower than primary)
+                        # Scaled to avoid over-scoring: max 10% bonus for perfect secondary alignment
+                        secondary_bonus = min(0.10, (expected_secondary_weight * 0.3) * (secondary_strength / 100))
+                        genius_alignment_bonus += secondary_bonus
+                        logger.info(f"[RoleAlign] Secondary genius bonus: {secondary_bonus:.3f} (letter: {secondary_letter}, strength: {secondary_strength}%, expected: {expected_secondary_weight:.2f})")
+                
+                # Method 3: Hybrid bonus if applicable
+                hybrid_bonus = 0.0
+                if hybrid_classification and prim and sec:
+                    # Additional bonus for balanced hybrid profile
+                    primary_letter = prim[0].get("letter", "")
+                    secondary_letter = sec[0].get("letter", "")
+                    
+                    both_expected = (expected_profile.get(primary_letter, 0) > 0.1 and 
+                                   expected_profile.get(secondary_letter, 0) > 0.1)
+                    
+                    if both_expected:
+                        hybrid_bonus = 0.05  # 5% bonus for having both expected factors
+                        logger.info(f"[RoleAlign] Hybrid bonus applied: {hybrid_bonus:.3f} for balanced {primary_letter}+{secondary_letter} profile")
+                
+                # Combine all scores with cap to prevent over-scoring
+                final_alignment_score = min(95, base_alignment_pct + (genius_alignment_bonus * 100) + (hybrid_bonus * 100))
+                
+                # Apply realistic variation
+                variation = random.uniform(-3, 6)  # Slightly optimistic bias, smaller range
+                current_role_alignment_pct = max(0, min(100, final_alignment_score + variation))
+                current_role_alignment_pct = round(current_role_alignment_pct, 1)
+                
+                logger.info(f"[RoleAlign] Final calculation: base={base_alignment_pct:.1f}% + genius_bonus={genius_alignment_bonus*100:.1f}% + hybrid_bonus={hybrid_bonus*100:.1f}% + variation={variation:.1f}% = {current_role_alignment_pct}%")
+                
+                # Determine risk level
+                if current_role_alignment_pct >= 71:
+                    current_role_alignment_risk = "Low"
+                elif current_role_alignment_pct >= 41:
+                    current_role_alignment_risk = "Medium"
+                else:
+                    current_role_alignment_risk = "High"
+            else:
+                logger.info(f"[RoleAlign] Missing user profile or expected profile for alignment calculation")
+            current_role_alignment_label = f"{current_role_alignment_risk} ({current_role_alignment_pct if current_role_alignment_pct is not None else '?'}%)"
+        else:
+            primary_qualities = []
+            secondary_qualities = []
+            hybrid_qualities = []
 
-        # Map letters to full genius names
-        def get_genius_name(letter):
-            mapping = {
-                'A': "Tech Genius",
-                'B': "Social Genius",
-                'C': "Visual Genius",
-                'D': "Word Genius",
-                'E': "Athletic Genius",
-                'F': "Number Genius",
-                'G': "Eco Genius",
-                'H': "Word Genius (Communication Focus)",
-                'I': "Spiritual Genius"
-            }
-            return mapping.get(letter, "Unknown Genius")
+        # Final fallback check - only if both primary and secondary are still None
+        if not primary_name:
+            # Use the most common genius factor across all sections as final fallback
+            all_counts = {}
+            for part in basic_results:
+                for opt, cnt in (part.get("optionCounts") or {}).items():
+                    all_counts[opt] = all_counts.get(opt, 0) + cnt
+            sorted_all = sorted(all_counts.items(), key=lambda x: x[1], reverse=True)
+            if sorted_all:
+                letter = sorted_all[0][0]
+                primary_name = MAPPING_FACTORS.get(letter, {}).get("name", f"Unknown Genius ({letter})")
+                primary_qualities = MAPPING_FACTORS.get(letter, {}).get("qualities", [])
+                logger.info(f"[AI Service] Final fallback: Using most common letter '{letter}' -> {primary_name}")
+                
+                if len(sorted_all) > 1:
+                    letter2 = sorted_all[1][0]
+                    secondary_name = MAPPING_FACTORS.get(letter2, {}).get("name", f"Unknown Genius ({letter2})")
+                    secondary_qualities = MAPPING_FACTORS.get(letter2, {}).get("qualities", [])
+            else:
+                primary_name = "Unidentified Genius"
+                primary_qualities = []
+                logger.warning("[AI Service] No genius factor could be determined from assessment data")
+        
+        if not secondary_name:
+            secondary_name = "None Identified" if primary_name != "Unidentified Genius" else primary_name
+            if primary_name != "Unidentified Genius":
+                secondary_qualities = []
 
-        primary_name = get_genius_name(primary_letter)
-        secondary_name = get_genius_name(secondary_letter)
-        genius_factors = [primary_name, secondary_name]
+        logger.info(f"RAG primary={primary_name} secondary={secondary_name}")
 
-        # Updated queries to retrieve ALL data containing the genius factor names
         queries = [
-            f'"{primary_name}" OR "{secondary_name}"',  # Get all documents containing either genius factor name
-            f'"{primary_name}" OR "{secondary_name}"',  # Same for industry mapping
-            f'"{primary_name}" OR "{secondary_name}"',  # Same for framework analysis
-            f'"{primary_name}" OR "{secondary_name}"'   # Same for retention research
+            f'"{primary_name}" OR "{secondary_name}"',
+            f'"{primary_name}" OR "{secondary_name}"',
+            f'"{primary_name}" OR "{secondary_name}"',
+            f'"{primary_name}" OR "{secondary_name}"'
         ]
 
-        # Map queries to source files (basenames)
         source_files = [
             "(68 Questions) Genius Factor Assessment for Fortune 1000 HR Departments.pdf",
             "Genius Factor to Fortune 1000 Industry Mapping.pdf",
@@ -232,47 +424,128 @@ class AIService:
             "retention & internal mobility research_findings.pdf"
         ]
 
-        query_source_pairs = list(zip(queries, source_files))
-
-        # Retrieve ALL relevant documents from each source using the corresponding query and metadata filter
         all_docs = []
-        for query, source_basename in query_source_pairs:
+        for query, source_basename in zip(queries, source_files):
             retriever = vector_store.as_retriever(
                 search_type="similarity",
-                search_kwargs={"k": 1000, "filter": {"source_file": source_basename}}  # High k to get all possible docs
+                search_kwargs={"k": 500, "filter": {"source_file": source_basename}}
             )
-            docs = await retriever.aget_relevant_documents(query)
-            if docs:
-                all_docs.extend(docs)
-                print(f"Retrieved {len(docs)} documents from {source_basename}")
+            try:
+                docs = await retriever.aget_relevant_documents(query)
+                if docs:
+                    all_docs.extend(docs)
+                    logger.info(f"Retrieved {len(docs)} docs from {source_basename}")
+            except Exception as e:
+                logger.exception(f"Error retrieving documents for {source_basename}: {e}")
 
-        # Remove duplicates based on content and source to avoid repetition
+        # Deduplicate
+        seen = set()
         unique_docs = []
-        seen_content = set()
         for doc in all_docs:
-            content_hash = hash(doc.page_content[:500] + doc.metadata.get('source_file', ''))
-            if content_hash not in seen_content:
-                seen_content.add(content_hash)
+            key = (doc.metadata.get("source_file", ""), doc.metadata.get("page", -1), doc.page_content[:400])
+            if key not in seen:
+                seen.add(key)
                 unique_docs.append(doc)
 
-        # Format retrieved data as plain text
-        result_text = f"Genius Factors Identified:\nPrimary: {primary_name} ({primary_letter})\nSecondary: {secondary_name} ({secondary_letter})\n\n"
-        result_text += f"Total Documents Retrieved: {len(unique_docs)}\n\nResponses:\n{all_responses}\n\nRetrieved Information:\n"
-        
-        for i, doc in enumerate(unique_docs, 1):
-            content = doc.page_content.replace('\n', ' ').strip()
-            source = doc.metadata.get('source_file', 'unknown')
-            page = doc.metadata.get('page', 0)
-            result_text += f"=== Document {i} ===\nSource: {source} (Page {page})\nContent: {content}\n\n"
+        # Format output
+        output_parts = []
+        output_parts.append(f"Genius Factors Identified: Primary = {primary_name}, Secondary = {secondary_name}")
+        if primary_qualities:
+            output_parts.append(f"Primary Qualities: {', '.join(primary_qualities)}")
+        if secondary_qualities:
+            output_parts.append(f"Secondary Qualities: {', '.join(secondary_qualities)}")
+        if hybrid_classification:
+            output_parts.append(f"Hybrid Classification: {hybrid_classification}")
+        if hybrid_qualities:
+            output_parts.append(f"Hybrid Qualities: {', '.join(hybrid_qualities)}")
+        if confidence_level:
+            output_parts.append(f"Confidence Level: {confidence_level}")
+        if alignment_label:
+            output_parts.append(f"Talent-Passion Alignment: {alignment_label}")
+        if current_role_alignment_label:
+            output_parts.append(f"Current Role Alignment: {current_role_alignment_label}")
+        output_parts.append("")
+        output_parts.append("Responses snapshot (basic majority):")
+        for pr in basic_results:
+            output_parts.append(f"Part: {pr.get('part')} | Majority: {pr.get('majorityOptions')} | MaxCount: {pr.get('maxCount')}")
 
+        output_parts.append(f"\nDocuments Retrieved: {len(unique_docs)}")
+        for i, doc in enumerate(unique_docs, 1):
+            src = doc.metadata.get("source_file", "unknown")
+            page = doc.metadata.get("page", -1)
+            content = doc.page_content.replace("\n", " ").strip()[:2000]
+            output_parts.append(f"=== Document {i} ===\nSource: {src} (Page {page})\n{content}\n")
+
+        result_text = "\n".join(output_parts)
         return result_text
-    
+
+    @classmethod
+    def _extract_metrics_from_analysis(cls, analysis_result: str) -> Dict[str, Any]:
+        """
+        Extract key metrics from the analysis result string for accurate report generation
+        """
+        import re
+        
+        metrics = {
+            "primary_genius": "Unknown Genius",
+            "secondary_genius": "None",
+            "confidence_level": "Unknown",
+            "role_alignment_score": 50.0,
+            "role_alignment_risk": "Moderate Risk",
+            "talent_passion_alignment": "Unknown",
+            "hybrid_classification": None
+        }
+        
+        try:
+            # Extract Primary and Secondary Genius Factors
+            primary_match = re.search(r"Primary = ([^,\n]+)", analysis_result)
+            if primary_match:
+                metrics["primary_genius"] = primary_match.group(1).strip()
+                
+            secondary_match = re.search(r"Secondary = ([^,\n]+)", analysis_result)
+            if secondary_match:
+                metrics["secondary_genius"] = secondary_match.group(1).strip()
+            
+            # Extract Confidence Level
+            confidence_match = re.search(r"Confidence Level:\s*([^\n]+)", analysis_result)
+            if confidence_match:
+                metrics["confidence_level"] = confidence_match.group(1).strip()
+            
+            # Extract Role Alignment with score and risk level
+            role_align_match = re.search(r"Current Role Alignment:\s*([^(]+)\(([0-9.]+)%\)", analysis_result)
+            if role_align_match:
+                metrics["role_alignment_risk"] = role_align_match.group(1).strip()
+                metrics["role_alignment_score"] = float(role_align_match.group(2))
+            
+            # Extract Talent-Passion Alignment
+            talent_passion_match = re.search(r"Talent-Passion Alignment:\s*([^\n]+)", analysis_result)
+            if talent_passion_match:
+                metrics["talent_passion_alignment"] = talent_passion_match.group(1).strip()
+                
+            # Extract Hybrid Classification
+            hybrid_match = re.search(r"Hybrid Classification:\s*([^\n]+)", analysis_result)
+            if hybrid_match:
+                metrics["hybrid_classification"] = hybrid_match.group(1).strip()
+                
+        except Exception as e:
+            logger.warning(f"Error parsing analysis result: {e}")
+            
+        logger.info(f"Extracted metrics: {metrics}")
+        return metrics
+
+
+
     @classmethod
     async def generate_career_recommendation(cls, analysis_result: str, all_answers: Any) -> Dict[str, Any]:
         try:
             # Check if analysis_result is empty or invalid
+            logger.info(f"Analysis result received: {analysis_result[:500]}...")
             if not analysis_result or not isinstance(analysis_result, str):
                 return {"status": "error", "message": "Invalid or empty analysis results provided"}
+
+            # Parse key metrics from analysis_result
+            parsed_metrics = cls._extract_metrics_from_analysis(analysis_result)
+            logger.info(f"Parsed metrics: {parsed_metrics}")
 
             llm = ChatOpenAI(
                 api_key=settings.OPENAI_API_KEY,
@@ -281,7 +554,7 @@ class AIService:
                 max_tokens=3000
             )
 
-            # Load system prompt
+            # Load system prompt with enhanced context
             prompt_file_path = Path(__file__).parent.parent / "utils" / "prompts.json"
             with open(prompt_file_path, 'r') as file:
                 prompt_data = json.load(file)
@@ -289,13 +562,38 @@ class AIService:
                 if not system_prompt:
                     raise ValueError("System prompt not found in JSON file")
 
+            # Enhanced system prompt with specific metric integration
+            enhanced_system_prompt = system_prompt + f"""
+
+            CRITICAL SCORING INSTRUCTIONS:
+            Use these EXACT values from the analysis results:
+            - Primary Genius Factor: {parsed_metrics['primary_genius']} 
+            - Secondary Genius Factor: {parsed_metrics['secondary_genius']}
+            - Confidence Level: {parsed_metrics['confidence_level']}
+            - Current Role Alignment: {parsed_metrics['role_alignment_score']}% ({parsed_metrics['role_alignment_risk']})
+            - Talent-Passion Alignment: {parsed_metrics['talent_passion_alignment']}
+            - Hybrid Classification: {parsed_metrics['hybrid_classification']}
+
+            IMPORTANT: 
+            1. Use the role_alignment_score ({parsed_metrics['role_alignment_score']}%) EXACTLY as provided in current_role_alignment_analysis.alignment_score
+            2. Calculate genius_factor_score based on confidence level: 
+            - High confidence: 80-95
+            - Moderate confidence: 65-80  
+            - Low confidence: 45-65
+            - Very Low confidence: 25-45
+            3. For retention risk assessment, consider role alignment and confidence:
+            - Role alignment <40%: High retention risk (70-90)
+            - Role alignment 40-70%: Moderate retention risk (40-70)
+            - Role alignment >70%: Low retention risk (10-40)
+            4. Mobility scores should reflect realistic opportunities based on genius factors and current role fit"""
+
             # Initialize Pydantic output parser
             parser = PydanticOutputParser(pydantic_object=IndividualEmployeeReport)
 
-            # Prompt template with format instructions
+            # Enhanced prompt template with parsed metrics
             report_prompt = PromptTemplate(
-                template=system_prompt + "\n\nAnalysis Data:\n{analysis_data}\n\n{format_instructions}\nGenerate the report:",
-                input_variables=["analysis_data"],
+                template=enhanced_system_prompt + "\n\nAnalysis Data:\n{analysis_data}\n\nParsed Metrics:\n{parsed_metrics}\n\n{format_instructions}\nGenerate the report:",
+                input_variables=["analysis_data", "parsed_metrics"],
                 partial_variables={"format_instructions": parser.get_format_instructions()}
             )
 
@@ -303,27 +601,92 @@ class AIService:
             logger.debug(f"Analysis data: {analysis_result}")
 
             # Render and log the full prompt
-            full_prompt_str = report_prompt.format(analysis_data=analysis_result)
-            print(f"Full prompt:\n{full_prompt_str}")
+            full_prompt_str = report_prompt.format(
+                analysis_data=analysis_result,
+                parsed_metrics=json.dumps(parsed_metrics, indent=2)
+            )
+            logger.debug(f"Full prompt:\n{full_prompt_str}")
         
             chain = report_prompt | llm | parser
-            output = await chain.ainvoke({"analysis_data": analysis_result})
-            risk_analysis = await cls._perform_risk_analysis(output.dict(), all_answers)
+            output = await chain.ainvoke({
+                "analysis_data": analysis_result,
+                "parsed_metrics": json.dumps(parsed_metrics, indent=2)
+            })
+            
+            # Override certain fields with parsed values to ensure accuracy
+            output_dict = output.dict()
+            
+            # Clean confidence level from genius factor names (remove "(Confidence: ...)" patterns)
+            import re
+            if "genius_factor_profile" in output_dict:
+                gfp = output_dict["genius_factor_profile"]
+                if "primary_genius_factor" in gfp:
+                    # Remove confidence level pattern like "(Confidence: Moderate)" or "(Confidence: High)" etc.
+                    cleaned_primary = re.sub(r'\s*\(Confidence:\s*[^)]+\)', '', gfp["primary_genius_factor"]).strip()
+                    output_dict["genius_factor_profile"]["primary_genius_factor"] = cleaned_primary
+                    
+                if "secondary_genius_factor" in gfp and gfp["secondary_genius_factor"]:
+                    # Remove confidence level pattern from secondary factor too
+                    cleaned_secondary = re.sub(r'\s*\(Confidence:\s*[^)]+\)', '', gfp["secondary_genius_factor"]).strip()
+                    output_dict["genius_factor_profile"]["secondary_genius_factor"] = cleaned_secondary
+            
+            # Ensure role alignment score matches exactly
+            if "current_role_alignment_analysis" in output_dict:
+                output_dict["current_role_alignment_analysis"]["alignment_score"] = str(parsed_metrics["role_alignment_score"])
+            
+            # Calculate realistic genius factor score based on confidence
+            confidence_level = parsed_metrics["confidence_level"].lower()
+            if "high" in confidence_level:
+                genius_factor_score = 85 + (parsed_metrics["role_alignment_score"] - 50) * 0.2
+            elif "moderate" in confidence_level:
+                genius_factor_score = 70 + (parsed_metrics["role_alignment_score"] - 50) * 0.15  
+            elif "low" in confidence_level:
+                genius_factor_score = 55 + (parsed_metrics["role_alignment_score"] - 50) * 0.1
+            else:  # very low
+                genius_factor_score = 35 + (parsed_metrics["role_alignment_score"] - 50) * 0.05
+                
+            output_dict["genius_factor_score"] = max(25, min(95, int(genius_factor_score)))
+            
+            risk_analysis = await cls._perform_risk_analysis(output_dict, all_answers)
+            
+            # Override risk analysis scores with more realistic values based on parsed metrics
+            if parsed_metrics["role_alignment_score"] < 40:
+                risk_analysis["scores"]["retention_risk_score"] = min(90, int(70 + (40 - parsed_metrics["role_alignment_score"])))
+            elif parsed_metrics["role_alignment_score"] < 70:
+                risk_analysis["scores"]["retention_risk_score"] = int(40 + (70 - parsed_metrics["role_alignment_score"]) * 0.5)
+            else:
+                risk_analysis["scores"]["retention_risk_score"] = max(10, int(40 - (parsed_metrics["role_alignment_score"] - 70) * 0.8))
+                
+            # Now set retention risk level using the calculated retention risk score and proper risk categorization
+            retention_risk_score = risk_analysis["scores"]["retention_risk_score"]
+            if retention_risk_score <= 30:
+                risk_category = "Low"
+            elif retention_risk_score <= 60:
+                risk_category = "Medium"  
+            else:
+                risk_category = "High"
+                
+            if "current_role_alignment_analysis" in output_dict:
+                output_dict["current_role_alignment_analysis"]["retention_risk_level"] = f"{risk_category}"
+                
+            # Adjust genius factor score in risk analysis based on confidence and alignment
+            base_genius_score = output_dict["genius_factor_score"]
+            risk_analysis["scores"]["genius_factor_score"] = max(25, min(95, base_genius_score))
+            
+            # Mobility score based on genius factor strength and role alignment
+            if parsed_metrics["role_alignment_score"] > 70:
+                mobility_score = 40 + (parsed_metrics["role_alignment_score"] - 70) * 0.5  # Lower mobility need when well-aligned
+            else:
+                mobility_score = 60 + (70 - parsed_metrics["role_alignment_score"]) * 0.4   # Higher mobility opportunity when misaligned
+                
+            risk_analysis["scores"]["mobility_opportunity_score"] = max(30, min(90, int(mobility_score)))
+            
+            logger.info(f"Final scores: genius_factor={output_dict['genius_factor_score']}, retention_risk={risk_analysis['scores']['retention_risk_score']}, mobility={risk_analysis['scores']['mobility_opportunity_score']}")
          
             return {
                 "status": "success",
-                "report": output.dict(),
-                "risk_analysis": risk_analysis,
-                "metadata": {
-                    "processingTimestamp": "06:47 PM PKT, August 29, 2025",
-                    "modelUsed": "gpt-4o-mini",
-                    "dataSourcesUsed": [
-                        "(68 Questions) Genius Factor Assessment for Fortune 1000 HR Departments.pdf",
-                        "Genius Factor Framework Analysis.pdf",
-                        "Genius Factor to Fortune 1000 Industry Mapping.pdf",
-                        "retention & internal mobility research_findings.pdf"
-                    ]
-                }
+                "report": output_dict,
+                "risk_analysis": risk_analysis
             }
 
         except Exception as e:

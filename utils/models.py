@@ -8,10 +8,10 @@ from utils.logger import logger
 from config import settings
 # Pydantic Model for the Report Structure
 class GeniusFactorProfile(BaseModel):
-    primary_genius_factor: str = Field(description="Primary Genius Factor with confidence level")
+    primary_genius_factor: str = Field(description="Primary Genius Factor name only (no confidence level)")
     description: str = Field(description="In-depth description of the primary factor")
     key_strengths: List[str] = Field(description="Top 3 natural abilities with detailed descriptions")
-    secondary_genius_factor: str = Field(default="", description="Secondary Genius Factor with confidence level, if applicable")
+    secondary_genius_factor: str = Field(default="", description="Secondary Genius Factor name only (no confidence level), if applicable")
     secondary_description: str = Field(default="", description="Description of the secondary factor's complementary traits")
     energy_sources: List[str] = Field(description="Top 3 activities that create flow state with detailed descriptions")
 

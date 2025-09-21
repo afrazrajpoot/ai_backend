@@ -7,6 +7,8 @@ from services.ai_service import AIService
 from services.db_service import DBService
 from utils.analyze_assessment import analyze_assessment_data
 from utils.logger import logger
+from utils.analysis_utils import analyze_full_from_parts, categorize_part_name
+from utils.logger import logger
 from services.notification_service import NotificationService
 from typing import Dict, Any
 import httpx
@@ -175,98 +177,110 @@ class AssessmentController:
     @staticmethod
     async def analyze_assessment(input_data: AssessmentData) -> Dict[str, Any]:
         """
-        Endpoint for assessment analysis with real-time notifications and Next.js integration
+        Endpoint for assessment analysis with deep section-by-section
+        genius detection and real-time notifications
         """
         try:
-         
-            # generate a raw query to get the departement of the user from the userId
-            # using asyncpg for raw query
+            # === fetch department ===
             db_params = {
-                "user": "postgres",
-                "password": "root",
-                "database": "genius_factor",
-                "host": "localhost",
-                "port": 5432
+                "user": "postgres", "password": "root",
+                "database": "genius_factor", "host": "localhost", "port": 5432
             }
             conn = await asyncpg.connect(**db_params)
-                        # departement is text[] in db, so fetch last element of the array
-            departement = await conn.fetchval('SELECT "department"[array_length("department", 1)] FROM "User" WHERE id = $1', input_data.userId)
+            departement = await conn.fetchval(
+                'SELECT "department"[array_length("department", 1)] FROM "User" WHERE id = $1',
+                input_data.userId
+            )
             await conn.close()
             if not departement:
                 departement = "Unknown"
-            input_data = input_data.dict()
-            input_data['departement'] = departement
-       
 
-            # Validate input data for notification
+            input_dict = input_data.dict()
+            input_dict["departement"] = departement
+
+            # === validate notification data ===
             notification_data = {
-                'employeeId': input_data['userId'],
-                'hrId': input_data['hrId'],
-                'employeeName': input_data['employeeName'],
-                'employeeEmail': input_data['employeeEmail'],
+                'employeeId': input_dict['userId'],
+                'hrId': input_dict['hrId'],
+                'employeeName': input_dict['employeeName'],
+                'employeeEmail': input_dict['employeeEmail'],
                 'message': 'Assessment analysis completed successfully!',
-                'status':'unread'
+                'status': 'unread'
             }
-            for key, value in notification_data.items():
-                if not isinstance(value, str) or not value.strip():
-                    logger.error(f"Invalid notification data: {key} is empty or not a string")
+            for k, v in notification_data.items():
+                if not isinstance(v, str) or not v.strip():
+                    logger.error(f"Invalid notification data: {k}")
                     await NotificationService.send_user_notification(
-                        input_data['userId'],
-                        input_data['hrId'],
-                        {
-                            'message': 'Invalid notification data',
-                            'progress': 0,
-                            'status': 'error',
-                            'error': f"Field {key} is invalid"
-                        }
+                        input_dict['userId'], input_dict['hrId'],
+                        {'message': 'Invalid notification data', 'progress': 0, 'status': 'error', 'error': f"Field {k} is invalid"}
                     )
-                    raise HTTPException(status_code=400, detail=f"Invalid notification data: {key}")
+                    raise HTTPException(status_code=400, detail=f"Invalid notification data: {k}")
 
-            # 1. Get basic assessment results
-            try:
-                # Convert dict data back to AssessmentPart objects
-                assessment_parts = [AssessmentPart(**part) for part in input_data['data']]
-                basic_results = analyze_assessment_data(assessment_parts)
-          
-            except Exception as e:
-                logger.error(f"Failed to analyze assessment data: {str(e)}")
-                await NotificationService.send_user_notification(
-                    input_data['userId'],
-                    input_data['hrId'],
-                    {
-                        'message': 'Basic analysis failed',
-                        'progress': 100,
-                        'status': 'error',
-                        'error': str(e)
-                    }
-                )
-                raise HTTPException(status_code=500, detail=str(e))
+            # === 1. Convert and run basic analysis ===
+            assessment_parts = [AssessmentPart(**part) for part in input_dict['data']]
+            basic_results = analyze_assessment_data(assessment_parts)
+            logger.info("Basic analysis completed")
+            logger.debug(json.dumps(basic_results, indent=2))
 
-            # 2. Enhance with document retrieval from vector store
+            # === 2. Build raw answers for deep section analysis ===
+            user_answers = {
+                "SelfAwareness": [],
+                "Talent": [],
+                "Passion": [],
+                "Mapping": [],
+                "Goals": []
+            }
+
+            for part in assessment_parts:
+                letters = []
+                for letter, count in part.optionCounts.dict(exclude_none=True).items():
+                    letters.extend([letter] * count)
+
+                # ✅ categorize using the robust helper
+                section_key = categorize_part_name(part.part)
+                user_answers[section_key].extend(letters)
+
+                logger.debug(f"Part '{part.part}' → bucket '{section_key}', letters={letters}")
+
+            # === 3. Deep analysis aggregated across all sections ===
+            # Pass basic_results (list of dicts) instead of user_answers (dict)
             try:
-                rag_results = await ai_service.analyze_majority_answers(basic_results)
+                deep_results = analyze_full_from_parts(basic_results)
+                deep_results["departement"] = input_data.departement
+                logger.info("Deep analysis completed")
+                logger.debug(json.dumps(deep_results, indent=2))
             except Exception as e:
-                logger.error(f"Failed to analyze majority answers: {str(e)}")
-                await NotificationService.send_user_notification(
-                    input_data['userId'],
-                    input_data['hrId'],
-                    {
-                        'message': 'Failed to perform advanced analysis',
-                        'progress': 100,
-                        'status': 'error',
-                        'error': str(e)
-                    }
-                )
-                raise HTTPException(status_code=500, detail=str(e))
-            
-            # 3. Generate professional career recommendation report
+                logger.error(f"Deep analysis failed: {str(e)}")
+                # Continue without deep results
+                deep_results = {"error": f"Deep analysis failed: {str(e)}"}
+
+            # === 4. Send notification success (optional) ===
+            await NotificationService.send_user_notification(
+                input_dict['userId'],
+                input_dict['hrId'],
+                {
+                    'message': 'Assessment analysis completed successfully!',
+                    'progress': 100,
+                    'status': 'done'
+                }
+            )
+
+            # === 4. RAG step with improved inputs ===
             try:
-                recommendations = await ai_service.generate_career_recommendation(rag_results, input_data['allAnswers'])
+                rag_results = await ai_service.analyze_majority_answers(basic_results, deep_results)
+                print(f'RAG results: {rag_results}')
+            except Exception as e:
+                logger.exception("RAG analysis failed")
+                rag_results = f"RAG analysis failed: {str(e)}"
+
+            # === 5. Generate professional career recommendation report ===
+            try:
+                recommendations = await ai_service.generate_career_recommendation(rag_results, input_dict.get('allAnswers', []))
             except Exception as e:
                 logger.error(f"Failed to generate recommendations: {str(e)}")
                 await NotificationService.send_user_notification(
-                    input_data['userId'],
-                    input_data['hrId'],
+                    input_dict['userId'],
+                    input_dict['hrId'],
                     {
                         'message': 'Failed to generate recommendations',
                         'progress': 100,
@@ -281,8 +295,8 @@ class AssessmentController:
                 logger.error(error_msg)
                 
                 await NotificationService.send_user_notification(
-                    input_data['userId'],
-                    input_data['hrId'],
+                    input_dict['userId'],
+                    input_dict['hrId'],
                     {
                         'message': 'Analysis failed',
                         'progress': 100,
@@ -296,29 +310,29 @@ class AssessmentController:
             # Prepare final result
             final_result = {
                 "status": "success",
-                "hrId": input_data['hrId'],
-                "departement": departement,
-                "userId": input_data['userId'],
+                "hrId": input_dict['hrId'],
+                "departement": input_dict['departement'],
+                "userId": input_dict['userId'],
                 "report": recommendations.get("report"),
                 "risk_analysis": recommendations.get("risk_analysis"),
                 "metadata": recommendations.get("metadata")
             }
 
-            # 4. Send data to Next.js API (asynchronous call)
-            nextjs_response = await AssessmentController.save_to_db(final_result)
+            # === 6. Save data to database ===
+            save_response = await AssessmentController.save_to_db(final_result)
             
-            if nextjs_response.get("status") == "error":
-                logger.warning(f"Next.js API call failed but proceeding: {nextjs_response.get('message')}")
-                # Continue even if Next.js call fails, but log the warning
+            if save_response.get("status") == "error":
+                logger.warning(f"Database save failed but proceeding: {save_response.get('message')}")
+                # Continue even if database save fails, but log the warning
 
             # Send success notification via Socket.IO
             await NotificationService.send_user_notification(
-                input_data['userId'],
-                input_data['hrId'],
+                input_dict['userId'],
+                input_dict['hrId'],
                 {
                     'message': 'Assessment analysis completed successfully!',
-                    'employeeName': input_data['employeeName'],
-                    'employeeEmail': input_data['employeeEmail'],
+                    'employeeName': input_dict['employeeName'],
+                    'employeeEmail': input_dict['employeeEmail'],
                     'progress': 100,
                     'status': 'unread',
                 }
@@ -330,8 +344,8 @@ class AssessmentController:
             except Exception as e:
                 logger.error(f"Failed to save notification to database: {str(e)}")
                 await NotificationService.send_user_notification(
-                    input_data['userId'],
-                    input_data['hrId'],
+                    input_dict['userId'],
+                    input_dict['hrId'],
                     {
                         'message': 'Failed to save notification to database',
                         'progress': 100,
@@ -341,15 +355,15 @@ class AssessmentController:
                 )
                 # Continue even if database save fails, but log and notify
 
-        
             return final_result
 
         except Exception as e:
             logger.error(f"Error in analyze_assessment: {str(e)}")
             
+            # Use input_dict for consistent access to user data
             await NotificationService.send_user_notification(
-                input_data['userId'],
-                input_data['hrId'],
+                input_dict['userId'],
+                input_dict['hrId'],
                 {
                     'message': 'Assessment analysis failed',
                     'progress': 100,

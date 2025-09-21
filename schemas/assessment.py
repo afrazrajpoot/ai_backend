@@ -47,5 +47,6 @@ class AssessmentData(BaseModel):
     allAnswers: Any
     userId: str
     hrId: str
+    departement: str
     employeeName: str
     employeeEmail: str
