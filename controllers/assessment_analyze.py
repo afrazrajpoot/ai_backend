@@ -255,16 +255,7 @@ class AssessmentController:
                 deep_results = {"error": f"Deep analysis failed: {str(e)}"}
 
             # === 4. Send notification success (optional) ===
-            await NotificationService.send_user_notification(
-                input_dict['userId'],
-                input_dict['hrId'],
-                {
-                    'message': 'Assessment analysis completed successfully!',
-                    'progress': 100,
-                    'status': 'done'
-                }
-            )
-
+           
             # === 4. RAG step with improved inputs ===
             try:
                 rag_results = await ai_service.analyze_majority_answers(basic_results, deep_results)
