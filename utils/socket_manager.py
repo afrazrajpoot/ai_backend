@@ -369,122 +369,61 @@ async def internal_mobility(sid, data):
         six_months_ago = current_date - timedelta(days=180)  # 6 months ago
 
         for dept in departments:
-            # Process ingoing array
-            for ingoing in dept.ingoing or []:
-                try:
-                    # Parse timestamp and ensure it's timezone-aware
-                    timestamp_str = ingoing['timestamp'].replace('Z', '+00:00')
-                    timestamp = datetime.fromisoformat(timestamp_str)
-                    # If timestamp is naive, make it aware
-                    if timestamp.tzinfo is None:
-                        timestamp = timestamp.replace(tzinfo=timezone.utc)
-                    
-                    if timestamp >= six_months_ago:
-                        mobility_data.append({
-                            'department': str(dept.name),
-                            'userId': str(ingoing['userId']),
-                            'type': 'ingoing',
-                            'timestamp': timestamp.isoformat(),
-                            'month': timestamp.strftime('%b %Y'),  # e.g., "Sep 2025"
-                            'promotion': str(dept.promotion) if ingoing == dept.ingoing[-1] else None,
-                            'transfer': str(dept.transfer) if ingoing == dept.ingoing[-1] else None
-                        })
-                except (KeyError, ValueError) as e:
-                    continue
-
-            # Process outgoing array
-            for outgoing in dept.outgoing or []:
-                try:
-                    # Parse timestamp and ensure it's timezone-aware
-                    timestamp_str = outgoing['timestamp'].replace('Z', '+00:00')
-                    timestamp = datetime.fromisoformat(timestamp_str)
-                    # If timestamp is naive, make it aware
-                    if timestamp.tzinfo is None:
-                        timestamp = timestamp.replace(tzinfo=timezone.utc)
-                    
-                    if timestamp >= six_months_ago:
-                        mobility_data.append({
-                            'department': str(dept.name),
-                            'userId': str(outgoing['userId']),
-                            'type': 'outgoing',
-                            'timestamp': timestamp.isoformat(),
-                            'month': timestamp.strftime('%b %Y'),
-                            'promotion': str(dept.promotion) if outgoing == dept.outgoing[-1] else None,
-                            'transfer': str(dept.transfer) if outgoing == dept.outgoing[-1] else None
-                        })
-                except (KeyError, ValueError) as e:
-                    print(f"Error processing outgoing entry for department {dept.name}: {e}")
-                    continue
+            # Count all ingoing movements (simple array length)
+            ingoing_count = len(dept.ingoing or [])
+            
+            # Count all outgoing movements (simple array length)
+            outgoing_count = len(dept.outgoing or [])
+            
+            # Calculate net movement
+            net_movement = ingoing_count - outgoing_count
+            
+            # Add department mobility summary
+            mobility_data.append({
+                'department': str(dept.name),
+                'ingoing': ingoing_count,
+                'outgoing': outgoing_count,
+                'net_movement': net_movement,
+                'promotion': safe_serialize(dept.promotion),
+                'transfer': safe_serialize(dept.transfer)
+            })
 
         if not mobility_data:
-            await sio.emit('mobility_info', {'error': 'No mobility data found for the past 6 months'}, to=sid)
+            await sio.emit('mobility_info', {'error': 'No mobility data found'}, to=sid)
             return
 
         # Create DataFrame for analysis
         df = pd.DataFrame(mobility_data)
 
-        # Monthly Mobility Trends - FIXED
-        months_order = [
-            (current_date - timedelta(days=30 * i)).strftime('%b %Y')
-            for i in range(5, -1, -1)  # Last 6 months in reverse order
-        ]
+        # Calculate total metrics
+        total_ingoing = int(df['ingoing'].sum())
+        total_outgoing = int(df['outgoing'].sum())
+        print(total_ingoing, total_outgoing,'outgoing ingoing')
+        total_net_movement = total_ingoing - total_outgoing
+        
+        # Calculate retention rate (simplified)
+        retention_rate = float(round((total_ingoing / max(total_outgoing, 1)) * 100, 1)) if total_outgoing > 0 else 100.0
 
-        monthly_trends = {
-            'ingoing': {month: 0 for month in months_order},
-            'outgoing': {month: 0 for month in months_order},
-            'promotions': {month: 0 for month in months_order}
-        }
-
-        # Count movements and promotions by month - FIXED
-        for month in months_order:
-            monthly_data = df[df['month'] == month]
-            monthly_trends['ingoing'][month] = int(len(monthly_data[monthly_data['type'] == 'ingoing']))
-            monthly_trends['outgoing'][month] = int(len(monthly_data[monthly_data['type'] == 'outgoing']))
-            # Count promotions (non-null and not "false")
-            monthly_trends['promotions'][month] = int(len(monthly_data[
-                (monthly_data['promotion'].notnull()) & (monthly_data['promotion'] != 'false')
-            ]))
-
-        # Department Movement Flow (Net Transfers) - FIXED
+        # Prepare department movement flow
         department_flow = {}
-        for dept in set(df['department']):
-            dept_data = df[df['department'] == dept]
-            incoming = int(len(dept_data[dept_data['type'] == 'ingoing']))
-            outgoing = int(len(dept_data[dept_data['type'] == 'outgoing']))
-            department_flow[str(dept)] = {
-                'incoming': incoming,
-                'outgoing': outgoing,
-                'net_movement': incoming - outgoing
+        for dept in mobility_data:
+            department_flow[dept['department']] = {
+                'incoming': dept['ingoing'],
+                'outgoing': dept['outgoing'],
+                'net_movement': dept['net_movement']
             }
 
-        # Calculate Metrics - FIXED
-        total_ingoing = int(len(df[df['type'] == 'ingoing']))
-        total_outgoing = int(len(df[df['type'] == 'outgoing']))
-        total_promotions = int(len(df[(df['promotion'].notnull()) & (df['promotion'] != 'false')]))
-        total_transfers = total_outgoing  # Transfer count equals outgoing count
-        total_movements = int(len(df))
-
-        # Retention rate: (ingoing - outgoing) / ingoing * 100
-        retention_rate = (
-            float(round((total_ingoing - total_outgoing) / total_ingoing * 100, 1))
-            if total_ingoing > 0 else 100.0
-        )
-
-        # Prepare response data - FIXED
+        # Prepare response data - SIMPLIFIED
         response_data = {
-            'monthlyMobilityTrends': monthly_trends,
             'departmentMovementFlow': department_flow,
             'metrics': {
-                'total_promotions': total_promotions,
-                'total_transfers': total_transfers,
-                'total_movements': total_movements,
+                'total_ingoing': total_ingoing,
+                'total_outgoing': total_outgoing,
+                'total_net_movement': total_net_movement,
                 'retention_rate': retention_rate
             },
-            'data_timeframe': {
-                'start_date': six_months_ago.strftime('%Y-%m-%d'),
-                'end_date': current_date.strftime('%Y-%m-%d')
-            },
-            "users": users  # Now properly serialized
+            'departments': mobility_data,  # Include raw department data
+            "users": users  # User data
         }
 
         # Apply safe serialization
@@ -501,8 +440,6 @@ async def internal_mobility(sid, data):
     finally:
         if prisma and prisma.is_connected():
             await prisma.disconnect()
-
-
 
 @sio.event
 async def admin_dashboard(sid, data):
@@ -917,8 +854,6 @@ async def admin_dashboard(sid, data):
             await prisma.disconnect()
 
 @sio.event
-
-
 async def admin_internal_mobility_analysis(sid, data):
     """Simple admin internal mobility analysis - Array counting only"""
     prisma = None
@@ -1214,12 +1149,23 @@ async def department_analysis(sid, data):
         department_employees = {}  # Store employee details by department
         department_info_map = {}  # Store department info by name
 
+        # Calculate total ingoing and outgoing across all departments
+        total_ingoing_all = 0
+        total_outgoing_all = 0
+
         # Create a mapping of department names to their info
         for dept in departments:
+            dept_ingoing = int(len(dept.ingoing)) if dept.ingoing and isinstance(dept.ingoing, list) else 0
+            dept_outgoing = int(len(dept.outgoing)) if dept.outgoing and isinstance(dept.outgoing, list) else 0
+            
+            # Add to totals
+            total_ingoing_all += dept_ingoing
+            total_outgoing_all += dept_outgoing
+            
             department_info_map[str(dept.name)] = {
                 'createdAt': dept.createdAt.strftime('%Y-%m-%d') if dept.createdAt else 'N/A',
-                'ingoing': int(len(dept.ingoing)) if dept.ingoing and isinstance(dept.ingoing, list) else 0,
-                'outgoing': int(len(dept.outgoing)) if dept.outgoing and isinstance(dept.outgoing, list) else 0
+                'ingoing': dept_ingoing,
+                'outgoing': dept_outgoing
             }
 
         for user in users:
@@ -1295,7 +1241,12 @@ async def department_analysis(sid, data):
 
         response_data = {
             'departments': department_data,
-            'cardData': card_data
+            'cardData': card_data,
+            'mobilityTotals': {  # NEW: Added total ingoing and outgoing
+                'totalIngoing': total_ingoing_all,
+                'totalOutgoing': total_outgoing_all,
+                'netMovement': total_ingoing_all - total_outgoing_all
+            }
         }
 
         # Apply final safe serialization
@@ -1311,7 +1262,6 @@ async def department_analysis(sid, data):
     finally:
         if prisma and prisma.is_connected():
             await prisma.disconnect()
-
 @sio.event
 async def get_rooms(sid):
     """Debug endpoint to see all rooms - FIXED"""

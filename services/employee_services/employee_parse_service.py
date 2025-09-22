@@ -55,7 +55,6 @@ async def parse_and_save_employees(file, hr_id: str):
         raise ValueError("File has no rows")
 
     # --- Debug ---
- 
     for r in rows[:5]:
         print(r)
 
@@ -66,13 +65,10 @@ async def parse_and_save_employees(file, hr_id: str):
     for idx, row in enumerate(rows):
         email = str(row.get("email", "")).strip().lower()
         if not email:
-        
-
             continue
 
         existing_user = await db.user.find_first(where={"email": email})
         if existing_user:
-       
             continue
 
         try:
@@ -101,25 +97,31 @@ async def parse_and_save_employees(file, hr_id: str):
             position = str(row.get("position", "")).strip()
             if dept_name and position:
                 try:
-                    # Convert department name to a JSON array
-               
-                    positions = [pos.strip() for pos in position.split(",") if pos.strip()]
-                    positions_json = json.dumps(positions)  # Serialize positions to JSON string
-                    userIdlIST = [employee.id]
-                    userIdJson = json.dumps(userIdlIST)
-                  
-                    await db.department.create(
-                        data={
-                            "name": dept_name,  # Pass JSON string
-                            "userId": employee.id,  # Link to the created user
-                            "hrId": hr_id,
+                    # Check if department already exists
+                    existing_department = await db.department.find_first(
+                        where={
+                            "name": dept_name,
+                            "hrId": hr_id
                         }
                     )
-               
+                    
+                    # Only create department if it doesn't exist
+                    if not existing_department:
+                        positions = [pos.strip() for pos in position.split(",") if pos.strip()]
+                        positions_json = json.dumps(positions)  # Serialize positions to JSON string
+                        userIdlIST = [employee.id]
+                        userIdJson = json.dumps(userIdlIST)
+                      
+                        await db.department.create(
+                            data={
+                                "name": dept_name,  # Pass JSON string
+                                "userId": employee.id,  # Link to the created user
+                                "hrId": hr_id,
+                            }
+                        )
                 except Exception as e:
                     # Handle the exception
                     pass
-              
 
             # --- Append to return list ---
             inserted_employees.append({
@@ -131,7 +133,6 @@ async def parse_and_save_employees(file, hr_id: str):
             })
        
         except Exception as e:
-         
             raise ValueError(f"Failed to insert row {idx+1}: {e}")
 
     await db.disconnect()
