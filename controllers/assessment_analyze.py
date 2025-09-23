@@ -332,21 +332,11 @@ class AssessmentController:
             # Save notification to database using DatabaseNotificationService
             try:
                 await db_notification_service.save_notification(notification_data)
+                
             except Exception as e:
-                logger.error(f"Failed to save notification to database: {str(e)}")
-                await NotificationService.send_user_notification(
-                    input_dict['userId'],
-                    input_dict['hrId'],
-                    {
-                        'message': 'Failed to save notification to database',
-                        'progress': 100,
-                        'status': 'error',
-                        'error': str(e)
-                    }
-                )
-                # Continue even if database save fails, but log and notify
-
-            return final_result
+                logger.error(f"Error saving notification: {str(e)}")
+                return
+                # Continue even if notification save fails
 
         except Exception as e:
             logger.error(f"Error in analyze_assessment: {str(e)}")

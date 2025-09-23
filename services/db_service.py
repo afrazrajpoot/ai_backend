@@ -62,6 +62,7 @@ class DBService:
                     "employeeEmail": notification_data.get("employeeEmail"),
                     "message": notification_data.get("message"),
                     "status": notification_data.get("status", "unread"),
+                    "updatedAt":datetime.now()
                 }
             )
         except Exception as e:
