@@ -41,8 +41,8 @@ sio = socketio.AsyncServer(
         "http://localhost:3000",
         "http://127.0.0.1:3000",
     ],
-    logger=True,
-    engineio_logger=True,
+    # logger=True,
+    # engineio_logger=True,
     # 🔥 CRITICAL FIXES FOR PAYLOAD ISSUES:
     compression=False,              # Disable compression to avoid parse errors  
     http_compression=False,         # Disable HTTP compression
@@ -60,11 +60,10 @@ sio = socketio.AsyncServer(
 @sio.event
 async def connect(sid, environ):
     try:
-        print(f"✅ Client connected: {sid}")
-        print(f"🌐 Origin: {environ.get('HTTP_ORIGIN')}")
+    
         return True
     except Exception as e:
-        print(f"❌ Connection error: {e}")
+  
         return False
 
 @sio.event  
@@ -80,12 +79,12 @@ async def connect_error(sid, data):
 async def subscribe_notifications(sid, data):
     """Subscribe to notifications"""
     try:
-        print(f"📨 Subscription request from {sid}: {data}")
+   
         
         if data.get('user_id'):
             room_id = f"user_{data['user_id']}"
             await sio.enter_room(sid, room_id)
-            print(f"👤 User {data['user_id']} joined room: {room_id}")
+         
             
             clients_in_room = 0
             if hasattr(sio, 'manager') and room_id in sio.manager.rooms:
@@ -102,7 +101,7 @@ async def subscribe_notifications(sid, data):
         elif data.get('channel'):
             room_id = f"channel_{data['channel']}"
             await sio.enter_room(sid, room_id)
-            print(f"📢 Client joined channel: {data['channel']}")
+      
             
             response_data = {
                 'message': f'Subscribed to channel {data["channel"]}',
@@ -312,7 +311,7 @@ async def hr_dashboard(sid, data):
         
         # Emit the comprehensive dashboard data
         await sio.emit('reports_info', safe_response, to=sid)
-        print(f"✅ Dashboard data sent successfully for HR {hr_id}")
+    
 
     except Exception as e:
         error_msg = f"Error in hr_dashboard: {str(e)}"
@@ -493,7 +492,7 @@ async def internal_mobility(sid, data):
         
         # Emit the mobility data
         await sio.emit('mobility_info', safe_response, to=sid)
-        print(f"✅ Mobility data sent successfully for HR {hr_id}")
+   
 
     except Exception as e:
         error_msg = f"Error in internal_mobility: {str(e)}"
@@ -503,9 +502,11 @@ async def internal_mobility(sid, data):
         if prisma and prisma.is_connected():
             await prisma.disconnect()
 
+
+
 @sio.event
 async def admin_dashboard(sid, data):
-    """Endpoint to fetch admin-level dashboard data for HR-specific metrics - FIXED"""
+    """Endpoint to fetch admin-level dashboard data for HR-specific metrics"""
     prisma = None
     try:
         # Extract adminId from the incoming data
@@ -520,55 +521,126 @@ async def admin_dashboard(sid, data):
 
         # Get all reports
         reports = await prisma.individualemployeereport.find_many()
+        
         # Get all departments for mobility data
         departments = await prisma.department.find_many()
+
+        # Get all HR users to map hrId to names
+        unique_hr_ids = list(set([report.hrId for report in reports if report.hrId]))
+        hr_users = []
+        if unique_hr_ids:
+            hr_users = await prisma.user.find_many(
+                where={
+                    'id': {
+                        'in': unique_hr_ids
+                    }
+                }
+            )
+        
+        # Create HR ID to name mapping
+        hr_name_mapping = {}
+        for user in hr_users:
+            hr_name_mapping[user.id] = {
+                'firstName': user.firstName or '',
+                'lastName': user.lastName or '',
+                'fullName': f"{user.firstName or ''} {user.lastName or ''}".strip() or 'Unknown HR'
+            }
 
         if not reports:
             await sio.emit('reports_info', {'error': 'No reports found'}, to=sid)
             return
 
-        # Process reports data - FIXED
+        # Get all unique employee IDs from reports
+        unique_employee_ids = list(set([report.userId for report in reports if report.userId]))
+        
+        # Get all employee users to map employeeId to names
+        employee_users = []
+        if unique_employee_ids:
+            employee_users = await prisma.user.find_many(
+                where={
+                    'id': {
+                        'in': unique_employee_ids
+                    }
+                }
+            )
+        
+        # Create Employee ID to name mapping
+        employee_name_mapping = {}
+        for user in employee_users:
+            employee_name_mapping[user.id] = {
+                'firstName': user.firstName or '',
+                'lastName': user.lastName or '',
+                'fullName': f"{user.firstName or ''} {user.lastName or ''}".strip() or 'Unknown Employee'
+            }
+
+        # Process reports data (UPDATED TO INCLUDE EMPLOYEE NAMES)
         reports_data = []
         employee_risk_details = []
         
         for report in reports:
-            retention_risk_score = 50.0
-            mobility_opportunity_score = 50.0
+            retention_risk_score = 50
+            mobility_opportunity_score = 50
             risk_factors = []
             mitigation_strategies = []
             
             if report.risk_analysis and isinstance(report.risk_analysis, dict):
                 risk_scores = report.risk_analysis.get('scores', {})
-                retention_risk_score = float(risk_scores.get('retention_risk_score', 50))
-                mobility_opportunity_score = float(risk_scores.get('mobility_opportunity_score', 50))
+                retention_risk_score = risk_scores.get('retention_risk_score', 50)
+                mobility_opportunity_score = risk_scores.get('mobility_opportunity_score', 50)
                 risk_factors = report.risk_analysis.get('risk_factors', [])
                 mitigation_strategies = report.risk_analysis.get('mitigation_strategies', [])
-
+            
             risk_category = "Medium"
             if retention_risk_score <= 30:
                 risk_category = "Low"
             elif retention_risk_score > 60:
                 risk_category = "High"
-
+            
+            # Get HR name from mapping
+            hr_info = hr_name_mapping.get(report.hrId, {
+                'firstName': '',
+                'lastName': '',
+                'fullName': 'Unknown HR'
+            })
+            
+            # Get Employee name from mapping
+            employee_info = employee_name_mapping.get(report.userId, {
+                'firstName': '',
+                'lastName': '',
+                'fullName': 'Unknown Employee'
+            })
+            
             reports_data.append({
                 'hr_id': str(report.hrId or 'Unknown HR'),
+                'hr_first_name': hr_info['firstName'],
+                'hr_last_name': hr_info['lastName'],
+                'hr_full_name': hr_info['fullName'],
                 'employee_id': str(report.userId or 'Unknown Employee'),
+                'employee_first_name': employee_info['firstName'],  # NEW
+                'employee_last_name': employee_info['lastName'],    # NEW
+                'employee_full_name': employee_info['fullName'],    # NEW
                 'department': str(report.departement or 'Unknown'),
                 'retention_risk_score': retention_risk_score,
                 'mobility_opportunity_score': mobility_opportunity_score,
-                'genius_factor_score': float(report.geniusFactorScore) if report.geniusFactorScore else 50.0,
+                'genius_factor_score': report.geniusFactorScore,
                 'created_year_month': report.createdAt.strftime('%Y-%m'),
                 'created_at': report.createdAt.isoformat()
             })
-
+            
             employee_risk_details.append({
                 'employee_id': str(report.userId or 'Unknown Employee'),
+                'employee_first_name': employee_info['firstName'],  # NEW
+                'employee_last_name': employee_info['lastName'],    # NEW
+                'employee_full_name': employee_info['fullName'],    # NEW
                 'hr_id': str(report.hrId or 'Unknown HR'),
+                'hr_first_name': hr_info['firstName'],
+                'hr_last_name': hr_info['lastName'],
+                'hr_full_name': hr_info['fullName'],
                 'department': str(report.departement or 'Unknown'),
                 'risk_score': retention_risk_score,
                 'risk_category': risk_category,
                 'mobility_score': mobility_opportunity_score,
-                'genius_factor': float(report.geniusFactorScore) if report.geniusFactorScore else 50.0,
+                'genius_factor': report.geniusFactorScore,
                 'risk_factors': risk_factors,
                 'mitigation_strategies': mitigation_strategies,
                 'report_id': str(report.id),
@@ -577,51 +649,67 @@ async def admin_dashboard(sid, data):
 
         df = pd.DataFrame(reports_data)
 
-        # Calculate basic statistics - FIXED
-        total_reports = int(len(reports))
-        unique_hr_ids = df['hr_id'].unique().tolist()
-        unique_departments = df['department'].unique().tolist()
+        # Calculate basic statistics (UPDATED TO INCLUDE EMPLOYEE NAMES)
+        total_reports = len(reports)
+        unique_hr_ids = df['hr_id'].unique()
+        unique_departments = df['department'].unique()
 
-        # HR Statistics - FIXED
+        # HR Statistics (UPDATED TO INCLUDE EMPLOYEE NAMES)
         hr_stats = {}
         for hr_id in unique_hr_ids:
             hr_reports = df[df['hr_id'] == hr_id]
+            hr_name_info = hr_name_mapping.get(hr_id, {
+                'firstName': '',
+                'lastName': '',
+                'fullName': 'Unknown HR'
+            })
+            
             hr_stats[str(hr_id)] = {
-                'report_count': int(len(hr_reports)),
-                'employee_count': int(hr_reports['employee_id'].nunique()),
-                'avg_retention_risk': float(round(hr_reports['retention_risk_score'].mean(), 1)) if not hr_reports.empty else 0.0,
-                'avg_mobility_score': float(round(hr_reports['mobility_opportunity_score'].mean(), 1)) if not hr_reports.empty else 0.0,
-                'avg_genius_factor': float(round(hr_reports['genius_factor_score'].mean(), 1)) if not hr_reports.empty else 0.0
+                'first_name': hr_name_info['firstName'],
+                'last_name': hr_name_info['lastName'],
+                'full_name': hr_name_info['fullName'],
+                'report_count': len(hr_reports),
+                'employee_count': hr_reports['employee_id'].nunique(),
+                # NEW: Include employee name examples
+                'sample_employees': hr_reports.head(3).apply(lambda row: {
+                    'employee_id': row['employee_id'],
+                    'employee_full_name': row['employee_full_name']
+                }, axis=1).tolist(),
+                'avg_retention_risk': round(hr_reports['retention_risk_score'].mean(), 1) if not hr_reports.empty else 0,
+                'avg_mobility_score': round(hr_reports['mobility_opportunity_score'].mean(), 1) if not hr_reports.empty else 0,
+                'avg_genius_factor': round(hr_reports['genius_factor_score'].mean(), 1) if not hr_reports.empty else 0
             }
 
-        # Overall Retention Risk and Genius Factor Distribution - FIXED
+        # Overall Retention Risk and Genius Factor Distribution
         retention_risk_distribution = {
-            'Low (0-30)': int((df['retention_risk_score'] <= 30).sum()),
-            'Medium (31-60)': int(((df['retention_risk_score'] > 30) & (df['retention_risk_score'] <= 60)).sum()),
-            'High (61-100)': int((df['retention_risk_score'] > 60).sum())
+            'Low (0-30)': len(df[df['retention_risk_score'] <= 30]),
+            'Medium (31-60)': len(df[(df['retention_risk_score'] > 30) & (df['retention_risk_score'] <= 60)]),
+            'High (61-100)': len(df[df['retention_risk_score'] > 60])
         }
 
         genius_factor_distribution = {
-            'Poor (0-20)': int((df['genius_factor_score'] <= 20).sum()),
-            'Fair (21-40)': int(((df['genius_factor_score'] > 20) & (df['genius_factor_score'] <= 40)).sum()),
-            'Good (41-60)': int(((df['genius_factor_score'] > 40) & (df['genius_factor_score'] <= 60)).sum()),
-            'Very Good (61-80)': int(((df['genius_factor_score'] > 60) & (df['genius_factor_score'] <= 80)).sum()),
-            'Excellent (81-100)': int((df['genius_factor_score'] > 80).sum())
+            'Poor (0-20)': len(df[df['genius_factor_score'] <= 20]),
+            'Fair (21-40)': len(df[(df['genius_factor_score'] > 20) & (df['genius_factor_score'] <= 40)]),
+            'Good (41-60)': len(df[(df['genius_factor_score'] > 40) & (df['genius_factor_score'] <= 60)]),
+            'Very Good (61-80)': len(df[(df['genius_factor_score'] > 60) & (df['genius_factor_score'] <= 80)]),
+            'Excellent (81-100)': len(df[df['genius_factor_score'] > 80])
         }
 
         # Generate last 6 months for trend data
+        from datetime import datetime
         from dateutil.relativedelta import relativedelta
+        
         current_date = datetime.now()
         last_6_months = []
         for i in range(5, -1, -1):  # Last 6 months including current
             month = current_date - relativedelta(months=i)
             last_6_months.append(month.strftime('%Y-%m'))
-
-        # Initialize mobility data structures - FIXED
+        
+        # Initialize mobility data structures
         mobility_trends = {}
         hr_mobility_trends = {str(hr_id): {} for hr_id in unique_hr_ids}
         department_mobility_trends = {str(dept): {} for dept in unique_departments}
-
+        
         # Initialize all months with zero values
         for month in last_6_months:
             mobility_trends[month] = {
@@ -644,8 +732,8 @@ async def admin_dashboard(sid, data):
                     'promotions': 0,
                     'transfers': 0
                 }
-
-        # Process department mobility data - FIXED
+        
+        # Process department mobility data
         for dept in departments:
             if not dept.createdAt:
                 continue
@@ -653,20 +741,19 @@ async def admin_dashboard(sid, data):
             dept_month = dept.createdAt.strftime('%Y-%m')
             if dept_month not in last_6_months:
                 continue
-
+                
             # Count ingoing/outgoing
-            ingoing_count = int(len(dept.ingoing)) if dept.ingoing and isinstance(dept.ingoing, list) else 0
-            outgoing_count = int(len(dept.outgoing)) if dept.outgoing and isinstance(dept.outgoing, list) else 0
-
+            ingoing_count = len(dept.ingoing) if dept.ingoing and isinstance(dept.ingoing, list) else 0
+            outgoing_count = len(dept.outgoing) if dept.outgoing and isinstance(dept.outgoing, list) else 0
+            
             # Update overall mobility data
             mobility_trends[dept_month]['ingoing'] += ingoing_count
             mobility_trends[dept_month]['outgoing'] += outgoing_count
-            
             if dept.promotion:
                 mobility_trends[dept_month]['promotions'] += 1
             if dept.transfer:
                 mobility_trends[dept_month]['transfers'] += 1
-
+            
             # Update HR-specific mobility data
             if dept.hrId and str(dept.hrId) in hr_mobility_trends:
                 hr_mobility_trends[str(dept.hrId)][dept_month]['ingoing'] += ingoing_count
@@ -675,7 +762,7 @@ async def admin_dashboard(sid, data):
                     hr_mobility_trends[str(dept.hrId)][dept_month]['promotions'] += 1
                 if dept.transfer:
                     hr_mobility_trends[str(dept.hrId)][dept_month]['transfers'] += 1
-
+            
             # Update department-specific mobility data
             if dept.name and str(dept.name) in department_mobility_trends:
                 department_mobility_trends[str(dept.name)][dept_month]['ingoing'] += ingoing_count
@@ -685,91 +772,114 @@ async def admin_dashboard(sid, data):
                 if dept.transfer:
                     department_mobility_trends[str(dept.name)][dept_month]['transfers'] += 1
 
-        # Enhanced Risk Analysis by HR - FIXED
+        # Enhanced Risk Analysis by HR (UPDATED TO INCLUDE EMPLOYEE NAMES)
         risk_analysis_by_hr = {}
         for hr_id in unique_hr_ids:
             hr_reports = df[df['hr_id'] == hr_id]
             hr_employee_details = [e for e in employee_risk_details if e['hr_id'] == hr_id]
-
-            # Risk distribution - FIXED
+            hr_name_info = hr_name_mapping.get(hr_id, {
+                'firstName': '',
+                'lastName': '',
+                'fullName': 'Unknown HR'
+            })
+            
+            # Risk distribution
             risk_distribution = {
-                'Low (0-30)': int((hr_reports['retention_risk_score'] <= 30).sum()),
-                'Medium (31-60)': int(((hr_reports['retention_risk_score'] > 30) & (hr_reports['retention_risk_score'] <= 60)).sum()),
-                'High (61-100)': int((hr_reports['retention_risk_score'] > 60).sum())
+                'Low (0-30)': len(hr_reports[hr_reports['retention_risk_score'] <= 30]),
+                'Medium (31-60)': len(hr_reports[(hr_reports['retention_risk_score'] > 30) & (hr_reports['retention_risk_score'] <= 60)]),
+                'High (61-100)': len(hr_reports[hr_reports['retention_risk_score'] > 60])
             }
-
-            # Monthly trend - FIXED
+            
+            # Monthly trend
             monthly_trend = {}
             if not hr_reports.empty:
                 hr_monthly = hr_reports.groupby('created_year_month').size()
                 for year_month, count in hr_monthly.items():
                     monthly_trend[str(year_month)] = int(count)
-
-            # Department Distribution - FIXED
+            
+            # Department Distribution (UPDATED TO INCLUDE EMPLOYEE NAMES)
             dept_distribution = {}
             hr_depts = hr_reports['department'].unique()
             for dept in hr_depts:
                 dept_reports = hr_reports[hr_reports['department'] == dept]
                 dept_distribution[str(dept)] = {
-                    'count': int(len(dept_reports)),
-                    'employee_count': int(dept_reports['employee_id'].nunique()),
-                    'avg_retention_risk': float(round(dept_reports['retention_risk_score'].mean(), 1)) if not dept_reports.empty else 0.0,
-                    'avg_mobility_score': float(round(dept_reports['mobility_opportunity_score'].mean(), 1)) if not dept_reports.empty else 0.0,
-                    'avg_genius_factor': float(round(dept_reports['genius_factor_score'].mean(), 1)) if not dept_reports.empty else 0.0,
+                    'count': len(dept_reports),
+                    'employee_count': dept_reports['employee_id'].nunique(),
+                    # NEW: Include sample employees for this department
+                    'sample_employees': dept_reports.head(3).apply(lambda row: {
+                        'employee_id': row['employee_id'],
+                        'employee_full_name': row['employee_full_name']
+                    }, axis=1).tolist(),
+                    'avg_retention_risk': round(dept_reports['retention_risk_score'].mean(), 1) if not dept_reports.empty else 0,
+                    'avg_mobility_score': round(dept_reports['mobility_opportunity_score'].mean(), 1) if not dept_reports.empty else 0,
+                    'avg_genius_factor': round(dept_reports['genius_factor_score'].mean(), 1) if not dept_reports.empty else 0,
                     'risk_distribution': {
-                        'Low (0-30)': int((dept_reports['retention_risk_score'] <= 30).sum()),
-                        'Medium (31-60)': int(((dept_reports['retention_risk_score'] > 30) & (dept_reports['retention_risk_score'] <= 60)).sum()),
-                        'High (61-100)': int((dept_reports['retention_risk_score'] > 60).sum())
+                        'Low (0-30)': len(dept_reports[dept_reports['retention_risk_score'] <= 30]),
+                        'Medium (31-60)': len(dept_reports[(dept_reports['retention_risk_score'] > 30) & (dept_reports['retention_risk_score'] <= 60)]),
+                        'High (61-100)': len(dept_reports[dept_reports['retention_risk_score'] > 60])
                     },
                     'genius_factor_distribution': {
-                        'Poor (0-20)': int((dept_reports['genius_factor_score'] <= 20).sum()),
-                        'Fair (21-40)': int(((dept_reports['genius_factor_score'] > 20) & (dept_reports['genius_factor_score'] <= 40)).sum()),
-                        'Good (41-60)': int(((dept_reports['genius_factor_score'] > 40) & (dept_reports['genius_factor_score'] <= 60)).sum()),
-                        'Very Good (61-80)': int(((dept_reports['genius_factor_score'] > 60) & (dept_reports['genius_factor_score'] <= 80)).sum()),
-                        'Excellent (81-100)': int((dept_reports['genius_factor_score'] > 80).sum())
+                        'Poor (0-20)': len(dept_reports[dept_reports['genius_factor_score'] <= 20]),
+                        'Fair (21-40)': len(dept_reports[(dept_reports['genius_factor_score'] > 20) & (dept_reports['genius_factor_score'] <= 40)]),
+                        'Good (41-60)': len(dept_reports[(dept_reports['genius_factor_score'] > 40) & (dept_reports['genius_factor_score'] <= 60)]),
+                        'Very Good (61-80)': len(dept_reports[(dept_reports['genius_factor_score'] > 60) & (dept_reports['genius_factor_score'] <= 80)]),
+                        'Excellent (81-100)': len(dept_reports[dept_reports['genius_factor_score'] > 80])
                     }
                 }
-
+            
             risk_analysis_by_hr[str(hr_id)] = {
+                'first_name': hr_name_info['firstName'],
+                'last_name': hr_name_info['lastName'],
+                'full_name': hr_name_info['fullName'],
                 'risk_distribution': risk_distribution,
                 'monthly_trend': monthly_trend,
                 'department_distribution': dept_distribution,
                 'employee_risk_details': hr_employee_details,
-                'total_reports': int(len(hr_reports)),
-                'total_employees': int(hr_reports['employee_id'].nunique()),
-                'avg_retention_risk': float(round(hr_reports['retention_risk_score'].mean(), 1)) if not hr_reports.empty else 0.0
+                'total_reports': len(hr_reports),
+                'total_employees': hr_reports['employee_id'].nunique(),
+                'avg_retention_risk': round(hr_reports['retention_risk_score'].mean(), 1) if not hr_reports.empty else 0
             }
 
-        # Calculate overall averages - FIXED
-        overall_avg_retention_risk = float(round(df['retention_risk_score'].mean(), 1)) if not df.empty else 0.0
-        overall_avg_mobility = float(round(df['mobility_opportunity_score'].mean(), 1)) if not df.empty else 0.0
-        overall_avg_genius = float(round(df['genius_factor_score'].mean(), 1)) if not df.empty else 0.0
+        # Calculate overall averages
+        overall_avg_retention_risk = round(df['retention_risk_score'].mean(), 1) if not df.empty else 0
+        overall_avg_mobility = round(df['mobility_opportunity_score'].mean(), 1) if not df.empty else 0
+        overall_avg_genius = round(df['genius_factor_score'].mean(), 1) if not df.empty else 0
 
-        # Prepare chart data for department-specific HR analysis - FIXED
+        # Prepare chart data for department-specific HR analysis (UPDATED TO INCLUDE EMPLOYEE NAMES)
         hr_dept_chart_data = {}
         for hr_id in unique_hr_ids:
+            hr_name_info = hr_name_mapping.get(hr_id, {
+                'firstName': '',
+                'lastName': '',
+                'fullName': 'Unknown HR'
+            })
+            
             hr_dept_chart_data[str(hr_id)] = {
+                'first_name': hr_name_info['firstName'],
+                'last_name': hr_name_info['lastName'],
+                'full_name': hr_name_info['fullName'],
                 'departments': {},
                 'risk_distribution': risk_analysis_by_hr[str(hr_id)]['risk_distribution'],
                 'monthly_trend': risk_analysis_by_hr[str(hr_id)]['monthly_trend']
             }
-
             for dept in risk_analysis_by_hr[str(hr_id)]['department_distribution']:
                 hr_dept_chart_data[str(hr_id)]['departments'][str(dept)] = {
                     'avg_retention_risk': risk_analysis_by_hr[str(hr_id)]['department_distribution'][dept]['avg_retention_risk'],
                     'avg_mobility_score': risk_analysis_by_hr[str(hr_id)]['department_distribution'][dept]['avg_mobility_score'],
                     'avg_genius_factor': risk_analysis_by_hr[str(hr_id)]['department_distribution'][dept]['avg_genius_factor'],
                     'risk_distribution': risk_analysis_by_hr[str(hr_id)]['department_distribution'][dept]['risk_distribution'],
-                    'genius_factor_distribution': risk_analysis_by_hr[str(hr_id)]['department_distribution'][dept]['genius_factor_distribution']
+                    'genius_factor_distribution': risk_analysis_by_hr[str(hr_id)]['department_distribution'][dept]['genius_factor_distribution'],
+                    # NEW: Include sample employees for chart data
+                    'sample_employees': risk_analysis_by_hr[str(hr_id)]['department_distribution'][dept]['sample_employees']
                 }
 
-        # Prepare the response - FIXED
+        # Prepare the response (UPDATED TO INCLUDE EMPLOYEE NAMES AND MAPPING)
         response_data = {
             'overallMetrics': {
                 'total_reports': total_reports,
-                'total_employees': int(df['employee_id'].nunique()),
-                'total_hr_ids': int(len(unique_hr_ids)),
-                'total_departments': int(len(unique_departments)),
+                'total_employees': df['employee_id'].nunique(),
+                'total_hr_ids': len(unique_hr_ids),
+                'total_departments': len(unique_departments),
                 'avg_retention_risk': overall_avg_retention_risk,
                 'avg_mobility_score': overall_avg_mobility,
                 'avg_genius_factor': overall_avg_genius,
@@ -782,6 +892,8 @@ async def admin_dashboard(sid, data):
                 }
             },
             'hrMetrics': hr_stats,
+            'hrNameMapping': hr_name_mapping,
+            'employeeNameMapping': employee_name_mapping,  # NEW: Added employee name mapping for frontend use
             'chartData': {
                 'risk_analysis_by_hr': risk_analysis_by_hr,
                 'hr_department_chart_data': hr_dept_chart_data
@@ -794,7 +906,7 @@ async def admin_dashboard(sid, data):
         
         # Emit the admin dashboard data
         await sio.emit('reports_info', safe_response, to=sid)
-        print(f"✅ Admin dashboard data sent successfully")
+
 
     except Exception as e:
         error_msg = f"Error in admin_dashboard: {str(e)}"
@@ -805,8 +917,10 @@ async def admin_dashboard(sid, data):
             await prisma.disconnect()
 
 @sio.event
+
+
 async def admin_internal_mobility_analysis(sid, data):
-    """FIXED admin internal mobility analysis"""
+    """Simple admin internal mobility analysis - Array counting only"""
     prisma = None
     try:
         admin_id = data.get('adminId')
@@ -822,42 +936,78 @@ async def admin_internal_mobility_analysis(sid, data):
             await sio.emit('mobility_analysis', {'error': 'No department data found'}, to=sid)
             return
 
+        # Fetch all HR users to map HR IDs to user details
+        hr_users = await prisma.user.find_many(
+            where={
+                'id': {
+                    'in': [str(dept.hrId) for dept in departments if dept.hrId]
+                }
+            }
+        )
+        
+        # Create a mapping of HR ID to user details
+        hr_user_map = {}
+        for user in hr_users:
+            hr_id = str(user.id)
+            hr_user_map[hr_id] = {
+                'firstName': user.firstName or '',
+                'lastName': user.lastName or '',
+                'fullName': f"{user.firstName or ''} {user.lastName or ''}".strip() or f"HR-{hr_id[:8]}",
+                'email': user.email or ''
+            }
+
         # Use timezone-aware datetime for comparison
         current_date = datetime.now(timezone.utc)
         
         # Calculate 6 months ago (including current month)
-        six_months_ago = current_date.replace(day=1)  # Start of current month
-        for _ in range(5):  # Go back 5 more months to get total of 6
+        six_months_ago = current_date.replace(day=1)
+        for _ in range(5):
             if six_months_ago.month == 1:
                 six_months_ago = six_months_ago.replace(year=six_months_ago.year - 1, month=12)
             else:
                 six_months_ago = six_months_ago.replace(month=six_months_ago.month - 1)
 
-        # Generate all months in the 6-month period (including current month)
+        # Generate all months in the 6-month period
         all_months = []
         temp_date = six_months_ago.replace(day=1)
-        for i in range(6):  # Exactly 6 months
+        for i in range(6):
             all_months.append(temp_date.strftime('%Y-%m'))
             if temp_date.month == 12:
                 temp_date = temp_date.replace(year=temp_date.year + 1, month=1)
             else:
                 temp_date = temp_date.replace(month=temp_date.month + 1)
 
-        # Initialize data structures - FIXED
+        # Initialize data structures
         hr_stats = {}
         monthly_trends = {month: {'incoming': 0, 'outgoing': 0} for month in all_months}
+
+        # Track separate counts for arrays
+        total_ingoing_array_count = 0
+        total_outgoing_array_count = 0
 
         for dept in departments:
             hr_id = str(dept.hrId)
             dept_name = str(dept.name)
+            movement_date = dept.updatedAt or dept.createdAt or current_date
+            movement_month = movement_date.strftime('%Y-%m')
 
-            # Initialize HR stats
+            # Initialize HR stats with user details
             if hr_id not in hr_stats:
+                user_details = hr_user_map.get(hr_id, {
+                    'firstName': '',
+                    'lastName': '',
+                    'fullName': f"HR-{hr_id[:8]}",
+                    'email': ''
+                })
+                
                 hr_stats[hr_id] = {
+                    'user': user_details,
                     'incoming': 0,
                     'outgoing': 0,
                     'promotions': 0,
                     'transfers': 0,
+                    'ingoing_array_count': 0,  # NEW: Separate array count
+                    'outgoing_array_count': 0, # NEW: Separate array count
                     'departments': {},
                     'total_movements': 0,
                     'monthly_trends': {month: {'incoming': 0, 'outgoing': 0} for month in all_months}
@@ -869,87 +1019,76 @@ async def admin_internal_mobility_analysis(sid, data):
                     'incoming': 0,
                     'outgoing': 0,
                     'promotions': 0,
-                    'transfers': 0
+                    'transfers': 0,
+                    'ingoing_array_count': 0,  # NEW
+                    'outgoing_array_count': 0  # NEW
                 }
 
-            # Count promotions from promotion field
-            if dept.promotion and dept.promotion.lower() == 'true':
-                movement_date = dept.updatedAt or dept.createdAt or current_date
-                movement_month = movement_date.strftime('%Y-%m')
-                if movement_month in all_months:  # Only count if within our 6-month range
-                    hr_stats[hr_id]['promotions'] += 1
-                    hr_stats[hr_id]['departments'][dept_name]['promotions'] += 1
-                    hr_stats[hr_id]['incoming'] += 1
-                    hr_stats[hr_id]['departments'][dept_name]['incoming'] += 1
-                    hr_stats[hr_id]['total_movements'] += 1
-                    
-                    # Add to monthly trends
-                    if movement_month in hr_stats[hr_id]['monthly_trends']:
-                        hr_stats[hr_id]['monthly_trends'][movement_month]['incoming'] += 1
-                    if movement_month in monthly_trends:
-                        monthly_trends[movement_month]['incoming'] += 1
+            # Only process if within our 6-month range
+            if movement_month not in all_months:
+                continue
 
-            # Count transfers from transfer field
-            if dept.transfer and dept.transfer.lower() == 'outgoing':
-                movement_date = dept.updatedAt or dept.createdAt or current_date
-                movement_month = movement_date.strftime('%Y-%m')
-                if movement_month in all_months:  # Only count if within our 6-month range
-                    hr_stats[hr_id]['transfers'] += 1
-                    hr_stats[hr_id]['departments'][dept_name]['transfers'] += 1
-                    hr_stats[hr_id]['outgoing'] += 1
-                    hr_stats[hr_id]['departments'][dept_name]['outgoing'] += 1
-                    hr_stats[hr_id]['total_movements'] += 1
-                    
-                    # Add to monthly trends
-                    if movement_month in hr_stats[hr_id]['monthly_trends']:
-                        hr_stats[hr_id]['monthly_trends'][movement_month]['outgoing'] += 1
-                    if movement_month in monthly_trends:
-                        monthly_trends[movement_month]['outgoing'] += 1
+            # SIMPLE COUNTING - Only from arrays
+            dept_ingoing_count = 0
+            dept_outgoing_count = 0
 
-            # Count ingoing movements from ingoing array
+            # Count INGOING - Every item in ingoing array
             if dept.ingoing and isinstance(dept.ingoing, list):
+                dept_ingoing_count = len(dept.ingoing)
+                total_ingoing_array_count += dept_ingoing_count
+                hr_stats[hr_id]['ingoing_array_count'] += dept_ingoing_count
+                hr_stats[hr_id]['departments'][dept_name]['ingoing_array_count'] += dept_ingoing_count
+                
                 for movement in dept.ingoing:
                     if isinstance(movement, dict):
-                        movement_date = parse_date(movement.get('timestamp')) or dept.updatedAt or dept.createdAt or current_date
-                        movement_month = movement_date.strftime('%Y-%m')
-                        if movement_month in all_months:  # Only count if within our 6-month range
+                        # Use movement timestamp or department timestamp
+                        move_date = parse_date(movement.get('timestamp')) or movement_date
+                        move_month = move_date.strftime('%Y-%m')
+                        
+                        if move_month in all_months:
                             hr_stats[hr_id]['incoming'] += 1
                             hr_stats[hr_id]['departments'][dept_name]['incoming'] += 1
                             hr_stats[hr_id]['total_movements'] += 1
                             
                             # Add to monthly trends
-                            if movement_month in hr_stats[hr_id]['monthly_trends']:
-                                hr_stats[hr_id]['monthly_trends'][movement_month]['incoming'] += 1
-                            if movement_month in monthly_trends:
-                                monthly_trends[movement_month]['incoming'] += 1
+                            hr_stats[hr_id]['monthly_trends'][move_month]['incoming'] += 1
+                            monthly_trends[move_month]['incoming'] += 1
 
-                            # Check if this is a transfer
-                            if movement.get('userId') and movement.get('userId') != dept.userId:
+                            # Count as transfer if it has userId (assuming it's a transfer)
+                            if movement.get('userId'):
                                 hr_stats[hr_id]['transfers'] += 1
                                 hr_stats[hr_id]['departments'][dept_name]['transfers'] += 1
 
-            # Count outgoing movements from outgoing array
+            # Count OUTGOING - Every item in outgoing array  
             if dept.outgoing and isinstance(dept.outgoing, list):
+                dept_outgoing_count = len(dept.outgoing)
+                total_outgoing_array_count += dept_outgoing_count
+                hr_stats[hr_id]['outgoing_array_count'] += dept_outgoing_count
+                hr_stats[hr_id]['departments'][dept_name]['outgoing_array_count'] += dept_outgoing_count
+                
                 for movement in dept.outgoing:
                     if isinstance(movement, dict):
-                        movement_date = parse_date(movement.get('timestamp')) or dept.updatedAt or dept.createdAt or current_date
-                        movement_month = movement_date.strftime('%Y-%m')
-                        if movement_month in all_months:  # Only count if within our 6-month range
+                        # Use movement timestamp or department timestamp
+                        move_date = parse_date(movement.get('timestamp')) or movement_date
+                        move_month = move_date.strftime('%Y-%m')
+                        
+                        if move_month in all_months:
                             hr_stats[hr_id]['outgoing'] += 1
                             hr_stats[hr_id]['departments'][dept_name]['outgoing'] += 1
                             hr_stats[hr_id]['total_movements'] += 1
                             
                             # Add to monthly trends
-                            if movement_month in hr_stats[hr_id]['monthly_trends']:
-                                hr_stats[hr_id]['monthly_trends'][movement_month]['outgoing'] += 1
-                            if movement_month in monthly_trends:
-                                monthly_trends[movement_month]['outgoing'] += 1
+                            hr_stats[hr_id]['monthly_trends'][move_month]['outgoing'] += 1
+                            monthly_trends[move_month]['outgoing'] += 1
 
-                            # This is always a transfer
+                            # Always count as transfer
                             hr_stats[hr_id]['transfers'] += 1
                             hr_stats[hr_id]['departments'][dept_name]['transfers'] += 1
 
-        # Convert monthly trends to sorted list format - FIXED
+            # Log what we found (for debugging)
+   
+
+        # Convert monthly trends to sorted list format
         monthly_trends_list = []
         for month in all_months:
             monthly_trends_list.append({
@@ -959,7 +1098,7 @@ async def admin_internal_mobility_analysis(sid, data):
                 'total': int(monthly_trends[month]['incoming'] + monthly_trends[month]['outgoing'])
             })
 
-        # Convert HR monthly trends to sorted list format - FIXED
+        # Convert HR monthly trends to sorted list format
         for hr_id in hr_stats:
             hr_monthly_list = []
             for month in all_months:
@@ -971,7 +1110,16 @@ async def admin_internal_mobility_analysis(sid, data):
                 })
             hr_stats[hr_id]['monthly_trends'] = hr_monthly_list
 
-        # Prepare response - FIXED
+        # Calculate totals
+        total_movements = sum([hr['total_movements'] for hr in hr_stats.values()])
+        total_promotions = sum([hr['promotions'] for hr in hr_stats.values()])
+        total_transfers = sum([hr['transfers'] for hr in hr_stats.values()])
+        total_incoming = sum([hr['incoming'] for hr in hr_stats.values()])
+        total_outgoing = sum([hr['outgoing'] for hr in hr_stats.values()])
+        total_ingoing_arrays = sum([hr['ingoing_array_count'] for hr in hr_stats.values()])
+        total_outgoing_arrays = sum([hr['outgoing_array_count'] for hr in hr_stats.values()])
+
+        # Prepare response
         response_data = {
             'hr_stats': hr_stats,
             'overall_monthly_trends': monthly_trends_list,
@@ -979,14 +1127,25 @@ async def admin_internal_mobility_analysis(sid, data):
                 'start': six_months_ago.strftime('%Y-%m-%d'),
                 'end': current_date.strftime('%Y-%m-%d'),
                 'months': all_months
+            },
+            'totals': {
+                'total_movements': total_movements,
+                'total_incoming': total_incoming,
+                'total_outgoing': total_outgoing,
+                'total_promotions': total_promotions,
+                'total_transfers': total_transfers,
+                'total_ingoing_arrays': total_ingoing_array_count,  # NEW: Total ingoing array items
+                'total_outgoing_arrays': total_outgoing_array_count  # NEW: Total outgoing array items
+            },
+            'debug': {
+                'total_departments_processed': len(departments),
+                'total_array_items_found': total_ingoing_array_count + total_outgoing_array_count
             }
         }
 
-        # Apply final safe serialization
         safe_response = safe_serialize(response_data)
-        
         await sio.emit('mobility_analysis', safe_response, to=sid)
-        print(f"✅ Admin mobility analysis sent successfully")
+  
 
     except Exception as e:
         error_msg = f"Error: {str(e)}"
