@@ -1,71 +1,124 @@
 import socketio
 from prisma import Prisma
-import numpy as np
-import pandas as pd
-from datetime import datetime, timedelta,timezone
+from datetime import datetime, timedelta, timezone
 import json
-# Create Socket.IO server with proper CORS configuration
+import math, numpy as np, pandas as pd
+from json import dumps
+
+def safe_serialize(obj):
+    # ----- scalars ------------------------------------------------
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+
+    if isinstance(obj, (np.floating, float)):
+        # ✨ CRITICAL: clean NaN / ±Inf
+        return None if (math.isnan(obj) or math.isinf(obj)) else float(obj)
+
+    # ----- sequences ---------------------------------------------
+    if isinstance(obj, (np.ndarray, list, tuple)):
+        return [safe_serialize(x) for x in obj]
+
+    if isinstance(obj, pd.Series):
+        return [safe_serialize(x) for x in obj.tolist()]
+
+    # ----- datetimes ---------------------------------------------
+    if isinstance(obj, (pd.Timestamp, datetime)):
+        return obj.isoformat()
+
+    # ----- mappings ----------------------------------------------
+    if isinstance(obj, dict):
+        return {k: safe_serialize(v) for k, v in obj.items()}
+
+    return obj
+
+# FIXED Socket.IO server configuration  
 sio = socketio.AsyncServer(
     async_mode='asgi',
     cors_allowed_origins=[
         "https://geniusfactor.ai",
-        "https://www.geniusfactor.ai",
+        "https://www.geniusfactor.ai", 
         "https://api.geniusfactor.ai",
         "http://localhost:3000",
         "http://127.0.0.1:3000",
-        "http://localhost:8000", 
-        "http://127.0.0.1:8000",
     ],
     logger=True,
-    engineio_logger=True
+    engineio_logger=True,
+    # 🔥 CRITICAL FIXES FOR PAYLOAD ISSUES:
+    compression=False,              # Disable compression to avoid parse errors  
+    http_compression=False,         # Disable HTTP compression
+    max_http_buffer_size=50000000,  # Increase to 50MB (was 10MB)
+    ping_timeout=120000,            # Increase ping timeout to 2 minutes
+    ping_interval=25000,            # Ping every 25 seconds
+    connect_timeout=60000,          # 1 minute connection timeout
+    # Additional WebSocket settings
+    transports=['websocket', 'polling'],  # Prefer WebSocket
+    allow_upgrades=True,
+    cookie=False                    # Disable cookies for better performance
 )
 
 # Socket.IO event handlers
 @sio.event
 async def connect(sid, environ):
-    print(f"✅ Client connected: {sid}")
-    print(f"🌐 Origin: {environ.get('HTTP_ORIGIN')}")
-    return True  # Accept the connection
+    try:
+        print(f"✅ Client connected: {sid}")
+        print(f"🌐 Origin: {environ.get('HTTP_ORIGIN')}")
+        return True
+    except Exception as e:
+        print(f"❌ Connection error: {e}")
+        return False
 
-@sio.event
+@sio.event  
 async def disconnect(sid):
     print(f"❌ Client disconnected: {sid}")
 
 @sio.event
+async def connect_error(sid, data):
+    print(f"🔥 Connection error for {sid}: {data}")
+
+
+@sio.event
 async def subscribe_notifications(sid, data):
     """Subscribe to notifications"""
-    print(f"📨 Subscription request from {sid}: {data}")
-    
-    if data.get('user_id'):
-        room_id = f"user_{data['user_id']}"
-        await sio.enter_room(sid, room_id)
-        print(f"👤 User {data['user_id']} joined room: {room_id}")
+    try:
+        print(f"📨 Subscription request from {sid}: {data}")
         
-        clients_in_room = 0
-        if hasattr(sio, 'manager') and room_id in sio.manager.rooms:
-            clients_in_room = len(sio.manager.rooms[room_id])
-        
-        await sio.emit('subscription_confirmed', {
-            'message': f'Subscribed to user notifications',
-            'user_id': data['user_id'],
-            'room': room_id,
-            'clients_in_room': clients_in_room
-        }, to=sid)
-        
-    elif data.get('channel'):
-        room_id = f"channel_{data['channel']}"
-        await sio.enter_room(sid, room_id)
-        print(f"📢 Client joined channel: {data['channel']}")
-        
-        await sio.emit('subscription_confirmed', {
-            'message': f'Subscribed to channel {data["channel"]}',
-            'channel': data['channel'],
-            'room': room_id
-        }, to=sid)
+        if data.get('user_id'):
+            room_id = f"user_{data['user_id']}"
+            await sio.enter_room(sid, room_id)
+            print(f"👤 User {data['user_id']} joined room: {room_id}")
+            
+            clients_in_room = 0
+            if hasattr(sio, 'manager') and room_id in sio.manager.rooms:
+                clients_in_room = len(sio.manager.rooms[room_id])
+                
+            response_data = {
+                'message': f'Subscribed to user notifications',
+                'user_id': str(data['user_id']),
+                'room': str(room_id),
+                'clients_in_room': int(clients_in_room)
+            }
+            await sio.emit('subscription_confirmed', safe_serialize(response_data), to=sid)
+            
+        elif data.get('channel'):
+            room_id = f"channel_{data['channel']}"
+            await sio.enter_room(sid, room_id)
+            print(f"📢 Client joined channel: {data['channel']}")
+            
+            response_data = {
+                'message': f'Subscribed to channel {data["channel"]}',
+                'channel': str(data['channel']),
+                'room': str(room_id)
+            }
+            await sio.emit('subscription_confirmed', safe_serialize(response_data), to=sid)
+            
+    except Exception as e:
+        print(f"❌ Error in subscribe_notifications: {e}")
+        await sio.emit('error', {'message': 'Subscription failed'}, to=sid)
 
 @sio.event
 async def hr_dashboard(sid, data):
-    """Endpoint to fetch department-level dashboard data using only real DB data"""
+    """Endpoint to fetch department-level dashboard data using only real DB data - FIXED"""
+    prisma = None
     try:
         # Extract hrId from the incoming data
         hr_id = data.get('hrId')
@@ -86,197 +139,193 @@ async def hr_dashboard(sid, data):
             await sio.emit('reports_info', {'error': 'No reports found for this HR'}, to=sid)
             return
 
-        # Process reports to extract available data from schema
+        # Process reports to extract available data from schema - CONVERT TO BASIC TYPES IMMEDIATELY
         reports_data = []
         for report in reports:
-            # Extract geniusFactorScore from the database field
-           
-            
-            # Extract scores from risk_analysis JSON
-            retention_risk_score = 50  # default value
-            mobility_opportunity_score = 50  # default value
+            # Extract scores from risk_analysis JSON - ENSURE FLOAT CONVERSION
+            retention_risk_score = 50.0
+            mobility_opportunity_score = 50.0
+            genius_factor_score = float(report.geniusFactorScore) if report.geniusFactorScore else 50.0
             
             if report.risk_analysis and isinstance(report.risk_analysis, dict):
                 risk_scores = report.risk_analysis.get('scores', {})
-                retention_risk_score = risk_scores.get('retention_risk_score', 50)
-                genius_factor_score = risk_scores.get('genius_factor_score', 50)
-                mobility_opportunity_score = risk_scores.get('mobility_opportunity_score', 50)
-            
+                retention_risk_score = float(risk_scores.get('retention_risk_score', 50))
+                genius_factor_score = float(risk_scores.get('genius_factor_score', genius_factor_score))
+                mobility_opportunity_score = float(risk_scores.get('mobility_opportunity_score', 50))
+
             # Extract month from createdAt for mobility trend analysis
             created_month = report.createdAt.strftime('%b')  # Jan, Feb, etc.
             
             reports_data.append({
-                'department': report.departement or 'Unknown',
+                'department': str(report.departement or 'Unknown'),
                 'genius_factor_score': genius_factor_score,
                 'retention_risk_score': retention_risk_score,
                 'mobility_opportunity_score': mobility_opportunity_score,
                 'created_month': created_month,
-                'created_at': report.createdAt
+                'created_at': report.createdAt.isoformat()
             })
 
-   
         df = pd.DataFrame(reports_data)
 
-        # Calculate actual mobility trend from createdAt dates
+        # Calculate actual mobility trend from createdAt dates - CONVERT TO BASIC TYPES
         mobility_trend = {}
         if not df.empty:
             # Group by month and count reports (as proxy for internal movement)
             monthly_counts = df.groupby('created_month').size()
             months_order = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-            
             for month in months_order:
                 mobility_trend[month] = int(monthly_counts.get(month, 0))
 
-        # Group by department and calculate metrics using only real data
+        # Group by department and calculate metrics using only real data - ENSURE ALL VALUES ARE PYTHON BASIC TYPES
         department_metrics = {}
-        
         for department in df['department'].unique():
             dept_data = df[df['department'] == department]
-            print(dept_data,'dept data')
-            # Calculate engagement from retention risk (inverse relationship)
-            engagement_scores = 100 - dept_data['retention_risk_score']
-            
-            department_metrics[department] = {
-                # Genius Factor Score Distribution (actual data)
+            print(dept_data, 'dept data')
+
+            # CRITICAL FIXES: Convert ALL pandas operations to basic Python types
+            department_metrics[str(department)] = {
+                # Genius Factor Score Distribution (actual data) - FIXED
                 'genius_factor_distribution': {
-                    '0-20': len(dept_data[dept_data['genius_factor_score'] <= 20]),
-                    '21-40': len(dept_data[(dept_data['genius_factor_score'] > 20) & (dept_data['genius_factor_score'] <= 40)]),
-                    '41-60': len(dept_data[(dept_data['genius_factor_score'] > 40) & (dept_data['genius_factor_score'] <= 60)]),
-                    '61-80': len(dept_data[(dept_data['genius_factor_score'] > 60) & (dept_data['genius_factor_score'] <= 80)]),
-                    '81-100': len(dept_data[dept_data['genius_factor_score'] > 80])
+                    '0-20': int((dept_data['genius_factor_score'] <= 20).sum()),
+                    '21-40': int(((dept_data['genius_factor_score'] > 20) & (dept_data['genius_factor_score'] <= 40)).sum()),
+                    '41-60': int(((dept_data['genius_factor_score'] > 40) & (dept_data['genius_factor_score'] <= 60)).sum()),
+                    '61-80': int(((dept_data['genius_factor_score'] > 60) & (dept_data['genius_factor_score'] <= 80)).sum()),
+                    '81-100': int((dept_data['genius_factor_score'] > 80).sum())
                 },
                 
-                # Productivity Score Distribution (using genius factor as proxy)
+                # Productivity Score Distribution (using genius factor as proxy) - FIXED  
                 'productivity_distribution': {
-                    '0-20': len(dept_data[dept_data['genius_factor_score'] <= 20]),
-                    '21-40': len(dept_data[(dept_data['genius_factor_score'] > 20) & (dept_data['genius_factor_score'] <= 40)]),
-                    '41-60': len(dept_data[(dept_data['genius_factor_score'] > 40) & (dept_data['genius_factor_score'] <= 60)]),
-                    '61-80': len(dept_data[(dept_data['genius_factor_score'] > 60) & (dept_data['genius_factor_score'] <= 80)]),
-                    '81-100': len(dept_data[dept_data['genius_factor_score'] > 80])
+                    '0-20': int((dept_data['genius_factor_score'] <= 20).sum()),
+                    '21-40': int(((dept_data['genius_factor_score'] > 20) & (dept_data['genius_factor_score'] <= 40)).sum()),
+                    '41-60': int(((dept_data['genius_factor_score'] > 40) & (dept_data['genius_factor_score'] <= 60)).sum()),
+                    '61-80': int(((dept_data['genius_factor_score'] > 60) & (dept_data['genius_factor_score'] <= 80)).sum()),
+                    '81-100': int((dept_data['genius_factor_score'] > 80).sum())
                 },
                 
-                # Engagement Score Distribution (calculated from retention risk)
+                # Engagement Score Distribution (calculated from retention risk) - FIXED
                 'engagement_distribution': {
-                    'Low (0-50)': len(dept_data[dept_data['retention_risk_score'] >= 50]),
-                    'Medium (51-70)': len(dept_data[(dept_data['retention_risk_score'] >= 30) & (dept_data['retention_risk_score'] < 50)]),
-                    'High (71-100)': len(dept_data[dept_data['retention_risk_score'] < 30])
+                    'Low (0-50)': int((dept_data['retention_risk_score'] >= 50).sum()),
+                    'Medium (51-70)': int(((dept_data['retention_risk_score'] >= 30) & (dept_data['retention_risk_score'] < 50)).sum()),
+                    'High (71-100)': int((dept_data['retention_risk_score'] < 30).sum())
                 },
                 
-                # Skills-Job Alignment Score (using mobility opportunity as proxy)
+                # Skills-Job Alignment Score (using mobility opportunity as proxy) - FIXED
                 'skills_alignment_distribution': {
-                    'Poor (0-50)': len(dept_data[dept_data['mobility_opportunity_score'] <= 50]),
-                    'Fair (51-70)': len(dept_data[(dept_data['mobility_opportunity_score'] > 50) & (dept_data['mobility_opportunity_score'] <= 70)]),
-                    'Good (71-85)': len(dept_data[(dept_data['mobility_opportunity_score'] > 70) & (dept_data['mobility_opportunity_score'] <= 85)]),
-                    'Excellent (86-100)': len(dept_data[dept_data['mobility_opportunity_score'] > 85])
+                    'Poor (0-50)': int((dept_data['mobility_opportunity_score'] <= 50).sum()),
+                    'Fair (51-70)': int(((dept_data['mobility_opportunity_score'] > 50) & (dept_data['mobility_opportunity_score'] <= 70)).sum()),
+                    'Good (71-85)': int(((dept_data['mobility_opportunity_score'] > 70) & (dept_data['mobility_opportunity_score'] <= 85)).sum()),
+                    'Excellent (86-100)': int((dept_data['mobility_opportunity_score'] > 85).sum())
                 },
                 
-                # Retention Risk Distribution (actual data)
+                # Retention Risk Distribution (actual data) - FIXED
                 'retention_risk_distribution': {
-                    'Low (0-30)': len(dept_data[dept_data['retention_risk_score'] <= 30]),
-                    'Medium (31-60)': len(dept_data[(dept_data['retention_risk_score'] > 30) & (dept_data['retention_risk_score'] <= 60)]),
-                    'High (61-100)': len(dept_data[dept_data['retention_risk_score'] > 60])
+                    'Low (0-30)': int((dept_data['retention_risk_score'] <= 30).sum()),
+                    'Medium (31-60)': int(((dept_data['retention_risk_score'] > 30) & (dept_data['retention_risk_score'] <= 60)).sum()),
+                    'High (61-100)': int((dept_data['retention_risk_score'] > 60).sum())
                 },
                 
-                # Department-specific mobility trend (actual report creation dates)
-                'mobility_trend': dict(zip(
-                    dept_data['created_month'].value_counts().index.tolist(),
-                    dept_data['created_month'].value_counts().values.tolist()
-                )),
+                # Department-specific mobility trend (actual report creation dates) - FIXED
+                'mobility_trend': {
+                    str(k): int(v) for k, v in zip(
+                        dept_data['created_month'].value_counts().index.tolist(),
+                        dept_data['created_month'].value_counts().values.tolist()
+                    )
+                },
                 
-                # Average scores (all calculated from real data)
+                # Average scores (all calculated from real data) - CRITICAL FIX
                 'avg_scores': {
-                    'genius_factor_score': round(dept_data['genius_factor_score'].mean(), 1),
-                    'retention_risk_score': round(dept_data['retention_risk_score'].mean(), 1),
-                    'mobility_opportunity_score': round(dept_data['mobility_opportunity_score'].mean(), 1),
-                    'productivity_score': round(dept_data['genius_factor_score'].mean(), 1),  # Proxy from genius factor
-                    'engagement_score': round((100 - dept_data['retention_risk_score']).mean(), 1),  # Calculated from risk
-                    'skills_alignment_score': round(dept_data['mobility_opportunity_score'].mean(), 1)  # Proxy from mobility
+                    'genius_factor_score': float(round(dept_data['genius_factor_score'].mean(), 1)),
+                    'retention_risk_score': float(round(dept_data['retention_risk_score'].mean(), 1)),
+                    'mobility_opportunity_score': float(round(dept_data['mobility_opportunity_score'].mean(), 1)),
+                    'productivity_score': float(round(dept_data['genius_factor_score'].mean(), 1)),  # Proxy from genius factor
+                    'engagement_score': float(round((100 - dept_data['retention_risk_score']).mean(), 1)),  # Calculated from risk
+                    'skills_alignment_score': float(round(dept_data['mobility_opportunity_score'].mean(), 1))  # Proxy from mobility
                 },
                 
-                'employee_count': len(dept_data),
-                'first_report_date': dept_data['created_at'].min().strftime('%Y-%m-%d') if not dept_data.empty else None,
-                'last_report_date': dept_data['created_at'].max().strftime('%Y-%m-%d') if not dept_data.empty else None
+                'employee_count': int(len(dept_data)),
+                'first_report_date': str(dept_data['created_at'].min()) if not dept_data.empty else None,
+                'last_report_date': str(dept_data['created_at'].max()) if not dept_data.empty else None
             }
 
-        # Prepare dashboard data
+        # Prepare dashboard data - ENSURE ALL VALUES ARE SERIALIZABLE
         dashboard_data = []
         color_palette = [
-            "hsl(var(--hr-chart-1))", "hsl(var(--hr-chart-2))", 
+            "hsl(var(--hr-chart-1))", "hsl(var(--hr-chart-2))",
             "hsl(var(--hr-chart-3))", "hsl(var(--hr-chart-4))",
             "hsl(var(--hr-chart-5))", "#8B5CF6", "#06B6D4", "#F59E0B"
         ]
 
         for i, (dept_name, metrics) in enumerate(department_metrics.items()):
             color = color_palette[i % len(color_palette)]
-            
             dashboard_data.append({
-                'name': dept_name,
-                'color': color,
-                'employee_count': metrics['employee_count'],
-                'completion': metrics['employee_count'],
+                "hrId": str(hr_id),
+                'name': str(dept_name),
+                'color': str(color),
+                'employee_count': int(metrics['employee_count']),
+                'completion': int(metrics['employee_count']),
                 'metrics': metrics
             })
 
-        # Calculate overall statistics from real data
-        total_employees = len(df)
+        # Calculate overall statistics from real data - FIXED
+        total_employees = int(len(df))
         overall_avg_scores = {
-            'genius_factor_score': round(df['genius_factor_score'].mean(), 1),
-            'retention_risk_score': round(df['retention_risk_score'].mean(), 1),
-            'mobility_opportunity_score': round(df['mobility_opportunity_score'].mean(), 1),
-            'productivity_score': round(df['genius_factor_score'].mean(), 1),
-            'engagement_score': round((100 - df['retention_risk_score']).mean(), 1),
-            'skills_alignment_score': round(df['mobility_opportunity_score'].mean(), 1)
+            'genius_factor_score': float(round(df['genius_factor_score'].mean(), 1)) if not df.empty else 0.0,
+            'retention_risk_score': float(round(df['retention_risk_score'].mean(), 1)) if not df.empty else 0.0,
+            'mobility_opportunity_score': float(round(df['mobility_opportunity_score'].mean(), 1)) if not df.empty else 0.0,
+            'productivity_score': float(round(df['genius_factor_score'].mean(), 1)) if not df.empty else 0.0,
+            'engagement_score': float(round((100 - df['retention_risk_score']).mean(), 1)) if not df.empty else 0.0,
+            'skills_alignment_score': float(round(df['mobility_opportunity_score'].mean(), 1)) if not df.empty else 0.0
         }
 
-        # Prepare the response with all real data
+        # Prepare the response with all real data - FINAL SAFETY CHECK
         response_data = {
+            "hrId": str(hr_id),
             'dashboardData': dashboard_data,
             'overallMetrics': {
                 'total_employees': total_employees,
                 'avg_scores': overall_avg_scores,
-                'department_count': len(department_metrics),
-                'total_reports': len(reports),
+                'department_count': int(len(department_metrics)),
+                'total_reports': int(len(reports)),
                 'mobility_trend': mobility_trend,
                 'data_timeframe': {
-                    'start_date': df['created_at'].min().strftime('%Y-%m-%d') if not df.empty else None,
-                    'end_date': df['created_at'].max().strftime('%Y-%m-%d') if not df.empty else None
+                    'start_date': str(df['created_at'].min()) if not df.empty else None,
+                    'end_date': str(df['created_at'].max()) if not df.empty else None
                 }
             },
             'chartData': {
                 # Distribution data for each department
-                'genius_factor_distribution': {dept: metrics['genius_factor_distribution'] for dept, metrics in department_metrics.items()},
-                'productivity_distribution': {dept: metrics['productivity_distribution'] for dept, metrics in department_metrics.items()},
-                'engagement_distribution': {dept: metrics['engagement_distribution'] for dept, metrics in department_metrics.items()},
-                'skills_alignment_distribution': {dept: metrics['skills_alignment_distribution'] for dept, metrics in department_metrics.items()},
-                'retention_risk_distribution': {dept: metrics['retention_risk_distribution'] for dept, metrics in department_metrics.items()},
-                
+                'genius_factor_distribution': {str(dept): metrics['genius_factor_distribution'] for dept, metrics in department_metrics.items()},
+                'productivity_distribution': {str(dept): metrics['productivity_distribution'] for dept, metrics in department_metrics.items()},
+                'engagement_distribution': {str(dept): metrics['engagement_distribution'] for dept, metrics in department_metrics.items()},
+                'skills_alignment_distribution': {str(dept): metrics['skills_alignment_distribution'] for dept, metrics in department_metrics.items()},
+                'retention_risk_distribution': {str(dept): metrics['retention_risk_distribution'] for dept, metrics in department_metrics.items()},
                 # Mobility trends (real data from createdAt)
                 'mobility_trend': mobility_trend,
-                'department_mobility_trends': {dept: metrics['mobility_trend'] for dept, metrics in department_metrics.items()},
-                
+                'department_mobility_trends': {str(dept): metrics['mobility_trend'] for dept, metrics in department_metrics.items()},
                 # Department averages
-                'department_averages': {dept: metrics['avg_scores'] for dept, metrics in department_metrics.items()}
+                'department_averages': {str(dept): metrics['avg_scores'] for dept, metrics in department_metrics.items()}
             }
         }
 
+        # Apply final safe serialization to everything
+        safe_response = safe_serialize(response_data)
+        
         # Emit the comprehensive dashboard data
-        await sio.emit('reports_info', response_data, to=sid)
-
-        print(f"✅ Real dashboard data sent for HR {hr_id}: {total_employees} employees across {len(department_metrics)} departments")
+        await sio.emit('reports_info', safe_response, to=sid)
+        print(f"✅ Dashboard data sent successfully for HR {hr_id}")
 
     except Exception as e:
         error_msg = f"Error in hr_dashboard: {str(e)}"
-        print(error_msg)
+        print(f"❌ {error_msg}")
         await sio.emit('reports_info', {'error': error_msg}, to=sid)
-
     finally:
-        if 'prisma' in locals() and prisma.is_connected():
+        if prisma and prisma.is_connected():
             await prisma.disconnect()
-
 
 @sio.event
 async def internal_mobility(sid, data):
-    """Endpoint to fetch internal mobility data from Department table and visualize it"""
+    """Endpoint to fetch internal mobility data from Department table and visualize it - FIXED"""
+    prisma = None
     try:
         # Extract hrId from the incoming data
         hr_id = data.get('hrId')
@@ -292,27 +341,25 @@ async def internal_mobility(sid, data):
         departments = await prisma.department.find_many(
             where={'hrId': hr_id},
         )
-        
+
         # Get users and convert to serializable format
         user_objects = await prisma.user.find_many(
             where={'hrId': hr_id},
         )
-        
-        # Convert users to serializable dictionaries
+
+        # Convert users to serializable dictionaries - FIXED
         users = []
         for user in user_objects:
             users.append({
-                'id': user.id,
-                'hrId': user.hrId,
-                'name': user.firstName + ' ' + user.lastName,
-                'email': user.email,
-                'position': user.position,
-                'department': user.department,
+                'id': str(user.id),
+                'hrId': str(user.hrId),
+                'name': str(user.firstName + ' ' + user.lastName),
+                'email': str(user.email),
+                'position': safe_serialize(user.position),
+                'department': safe_serialize(user.department),
                 'salary': float(user.salary) if user.salary else None,
-                # 'hireDate': user.hireDate.isoformat() if user.hireDate else None,
-                # Add any other fields you need
             })
-        
+
         if not departments:
             await sio.emit('mobility_info', {'error': 'No departments found for this HR'}, to=sid)
             return
@@ -335,16 +382,15 @@ async def internal_mobility(sid, data):
                     
                     if timestamp >= six_months_ago:
                         mobility_data.append({
-                            'department': dept.name,
-                            'userId': ingoing['userId'],
+                            'department': str(dept.name),
+                            'userId': str(ingoing['userId']),
                             'type': 'ingoing',
-                            'timestamp': timestamp,
+                            'timestamp': timestamp.isoformat(),
                             'month': timestamp.strftime('%b %Y'),  # e.g., "Sep 2025"
-                            'promotion': dept.promotion if ingoing == dept.ingoing[-1] else None,
-                            'transfer': dept.transfer if ingoing == dept.ingoing[-1] else None
+                            'promotion': str(dept.promotion) if ingoing == dept.ingoing[-1] else None,
+                            'transfer': str(dept.transfer) if ingoing == dept.ingoing[-1] else None
                         })
                 except (KeyError, ValueError) as e:
-                    print(f"Error processing ingoing entry for department {dept.name}: {e}")
                     continue
 
             # Process outgoing array
@@ -359,13 +405,13 @@ async def internal_mobility(sid, data):
                     
                     if timestamp >= six_months_ago:
                         mobility_data.append({
-                            'department': dept.name,
-                            'userId': outgoing['userId'],
+                            'department': str(dept.name),
+                            'userId': str(outgoing['userId']),
                             'type': 'outgoing',
-                            'timestamp': timestamp,
+                            'timestamp': timestamp.isoformat(),
                             'month': timestamp.strftime('%b %Y'),
-                            'promotion': dept.promotion if outgoing == dept.outgoing[-1] else None,
-                            'transfer': dept.transfer if outgoing == dept.outgoing[-1] else None
+                            'promotion': str(dept.promotion) if outgoing == dept.outgoing[-1] else None,
+                            'transfer': str(dept.transfer) if outgoing == dept.outgoing[-1] else None
                         })
                 except (KeyError, ValueError) as e:
                     print(f"Error processing outgoing entry for department {dept.name}: {e}")
@@ -378,53 +424,54 @@ async def internal_mobility(sid, data):
         # Create DataFrame for analysis
         df = pd.DataFrame(mobility_data)
 
-        # Monthly Mobility Trends
+        # Monthly Mobility Trends - FIXED
         months_order = [
             (current_date - timedelta(days=30 * i)).strftime('%b %Y')
             for i in range(5, -1, -1)  # Last 6 months in reverse order
         ]
+
         monthly_trends = {
             'ingoing': {month: 0 for month in months_order},
             'outgoing': {month: 0 for month in months_order},
             'promotions': {month: 0 for month in months_order}
         }
 
-        # Count movements and promotions by month
+        # Count movements and promotions by month - FIXED
         for month in months_order:
             monthly_data = df[df['month'] == month]
-            monthly_trends['ingoing'][month] = len(monthly_data[monthly_data['type'] == 'ingoing'])
-            monthly_trends['outgoing'][month] = len(monthly_data[monthly_data['type'] == 'outgoing'])
+            monthly_trends['ingoing'][month] = int(len(monthly_data[monthly_data['type'] == 'ingoing']))
+            monthly_trends['outgoing'][month] = int(len(monthly_data[monthly_data['type'] == 'outgoing']))
             # Count promotions (non-null and not "false")
-            monthly_trends['promotions'][month] = len(monthly_data[
+            monthly_trends['promotions'][month] = int(len(monthly_data[
                 (monthly_data['promotion'].notnull()) & (monthly_data['promotion'] != 'false')
-            ])
+            ]))
 
-        # Department Movement Flow (Net Transfers)
+        # Department Movement Flow (Net Transfers) - FIXED
         department_flow = {}
         for dept in set(df['department']):
             dept_data = df[df['department'] == dept]
-            incoming = len(dept_data[dept_data['type'] == 'ingoing'])
-            outgoing = len(dept_data[dept_data['type'] == 'outgoing'])
-            department_flow[dept] = {
+            incoming = int(len(dept_data[dept_data['type'] == 'ingoing']))
+            outgoing = int(len(dept_data[dept_data['type'] == 'outgoing']))
+            department_flow[str(dept)] = {
                 'incoming': incoming,
                 'outgoing': outgoing,
                 'net_movement': incoming - outgoing
             }
 
-        # Calculate Metrics
-        total_ingoing = len(df[df['type'] == 'ingoing'])
-        total_outgoing = len(df[df['type'] == 'outgoing'])
-        total_promotions = len(df[(df['promotion'].notnull()) & (df['promotion'] != 'false')])
+        # Calculate Metrics - FIXED
+        total_ingoing = int(len(df[df['type'] == 'ingoing']))
+        total_outgoing = int(len(df[df['type'] == 'outgoing']))
+        total_promotions = int(len(df[(df['promotion'].notnull()) & (df['promotion'] != 'false')]))
         total_transfers = total_outgoing  # Transfer count equals outgoing count
-        total_movements = len(df)
-        
+        total_movements = int(len(df))
+
         # Retention rate: (ingoing - outgoing) / ingoing * 100
         retention_rate = (
-            round((total_ingoing - total_outgoing) / total_ingoing * 100, 1)
+            float(round((total_ingoing - total_outgoing) / total_ingoing * 100, 1))
             if total_ingoing > 0 else 100.0
         )
 
-        # Prepare response data
+        # Prepare response data - FIXED
         response_data = {
             'monthlyMobilityTrends': monthly_trends,
             'departmentMovementFlow': department_flow,
@@ -441,21 +488,25 @@ async def internal_mobility(sid, data):
             "users": users  # Now properly serialized
         }
 
+        # Apply safe serialization
+        safe_response = safe_serialize(response_data)
+        
         # Emit the mobility data
-        await sio.emit('mobility_info', response_data, to=sid)
-        print(f"✅ Mobility data sent for HR {hr_id}: {total_movements} total movements, {len(users)} users")
+        await sio.emit('mobility_info', safe_response, to=sid)
+        print(f"✅ Mobility data sent successfully for HR {hr_id}")
 
     except Exception as e:
         error_msg = f"Error in internal_mobility: {str(e)}"
-        print(error_msg)
+        print(f"❌ {error_msg}")
         await sio.emit('mobility_info', {'error': error_msg}, to=sid)
-
     finally:
-        if 'prisma' in locals() and prisma.is_connected():
+        if prisma and prisma.is_connected():
             await prisma.disconnect()
+
 @sio.event
 async def admin_dashboard(sid, data):
-    """Endpoint to fetch admin-level dashboard data for HR-specific metrics"""
+    """Endpoint to fetch admin-level dashboard data for HR-specific metrics - FIXED"""
+    prisma = None
     try:
         # Extract adminId from the incoming data
         admin_id = data.get('adminId')
@@ -469,7 +520,6 @@ async def admin_dashboard(sid, data):
 
         # Get all reports
         reports = await prisma.individualemployeereport.find_many()
-        
         # Get all departments for mobility data
         departments = await prisma.department.find_many()
 
@@ -477,104 +527,101 @@ async def admin_dashboard(sid, data):
             await sio.emit('reports_info', {'error': 'No reports found'}, to=sid)
             return
 
-        # Process reports data (KEEP EXISTING CODE)
+        # Process reports data - FIXED
         reports_data = []
         employee_risk_details = []
         
         for report in reports:
-            retention_risk_score = 50
-            mobility_opportunity_score = 50
+            retention_risk_score = 50.0
+            mobility_opportunity_score = 50.0
             risk_factors = []
             mitigation_strategies = []
             
             if report.risk_analysis and isinstance(report.risk_analysis, dict):
                 risk_scores = report.risk_analysis.get('scores', {})
-                retention_risk_score = risk_scores.get('retention_risk_score', 50)
-                mobility_opportunity_score = risk_scores.get('mobility_opportunity_score', 50)
+                retention_risk_score = float(risk_scores.get('retention_risk_score', 50))
+                mobility_opportunity_score = float(risk_scores.get('mobility_opportunity_score', 50))
                 risk_factors = report.risk_analysis.get('risk_factors', [])
                 mitigation_strategies = report.risk_analysis.get('mitigation_strategies', [])
-            
+
             risk_category = "Medium"
             if retention_risk_score <= 30:
                 risk_category = "Low"
             elif retention_risk_score > 60:
                 risk_category = "High"
-            
+
             reports_data.append({
-                'hr_id': report.hrId or 'Unknown HR',
-                'employee_id': report.userId or 'Unknown Employee',
-                'department': report.departement or 'Unknown',
+                'hr_id': str(report.hrId or 'Unknown HR'),
+                'employee_id': str(report.userId or 'Unknown Employee'),
+                'department': str(report.departement or 'Unknown'),
                 'retention_risk_score': retention_risk_score,
                 'mobility_opportunity_score': mobility_opportunity_score,
-                'genius_factor_score': report.geniusFactorScore,
+                'genius_factor_score': float(report.geniusFactorScore) if report.geniusFactorScore else 50.0,
                 'created_year_month': report.createdAt.strftime('%Y-%m'),
-                'created_at': report.createdAt
+                'created_at': report.createdAt.isoformat()
             })
-            
+
             employee_risk_details.append({
-                'employee_id': report.userId or 'Unknown Employee',
-                'hr_id': report.hrId or 'Unknown HR',
-                'department': report.departement or 'Unknown',
+                'employee_id': str(report.userId or 'Unknown Employee'),
+                'hr_id': str(report.hrId or 'Unknown HR'),
+                'department': str(report.departement or 'Unknown'),
                 'risk_score': retention_risk_score,
                 'risk_category': risk_category,
                 'mobility_score': mobility_opportunity_score,
-                'genius_factor': report.geniusFactorScore,
+                'genius_factor': float(report.geniusFactorScore) if report.geniusFactorScore else 50.0,
                 'risk_factors': risk_factors,
                 'mitigation_strategies': mitigation_strategies,
-                'report_id': report.id,
+                'report_id': str(report.id),
                 'created_at': report.createdAt.strftime('%Y-%m-%d')
             })
 
         df = pd.DataFrame(reports_data)
 
-        # Calculate basic statistics (KEEP EXISTING CODE)
-        total_reports = len(reports)
-        unique_hr_ids = df['hr_id'].unique()
-        unique_departments = df['department'].unique()
+        # Calculate basic statistics - FIXED
+        total_reports = int(len(reports))
+        unique_hr_ids = df['hr_id'].unique().tolist()
+        unique_departments = df['department'].unique().tolist()
 
-        # HR Statistics (KEEP EXISTING CODE)
+        # HR Statistics - FIXED
         hr_stats = {}
         for hr_id in unique_hr_ids:
             hr_reports = df[df['hr_id'] == hr_id]
-            hr_stats[hr_id] = {
-                'report_count': len(hr_reports),
-                'employee_count': hr_reports['employee_id'].nunique(),
-                'avg_retention_risk': round(hr_reports['retention_risk_score'].mean(), 1) if not hr_reports.empty else 0,
-                'avg_mobility_score': round(hr_reports['mobility_opportunity_score'].mean(), 1) if not hr_reports.empty else 0,
-                'avg_genius_factor': round(hr_reports['genius_factor_score'].mean(), 1) if not hr_reports.empty else 0
+            hr_stats[str(hr_id)] = {
+                'report_count': int(len(hr_reports)),
+                'employee_count': int(hr_reports['employee_id'].nunique()),
+                'avg_retention_risk': float(round(hr_reports['retention_risk_score'].mean(), 1)) if not hr_reports.empty else 0.0,
+                'avg_mobility_score': float(round(hr_reports['mobility_opportunity_score'].mean(), 1)) if not hr_reports.empty else 0.0,
+                'avg_genius_factor': float(round(hr_reports['genius_factor_score'].mean(), 1)) if not hr_reports.empty else 0.0
             }
 
-        # Overall Retention Risk and Genius Factor Distribution (KEEP EXISTING CODE)
+        # Overall Retention Risk and Genius Factor Distribution - FIXED
         retention_risk_distribution = {
-            'Low (0-30)': len(df[df['retention_risk_score'] <= 30]),
-            'Medium (31-60)': len(df[(df['retention_risk_score'] > 30) & (df['retention_risk_score'] <= 60)]),
-            'High (61-100)': len(df[df['retention_risk_score'] > 60])
+            'Low (0-30)': int((df['retention_risk_score'] <= 30).sum()),
+            'Medium (31-60)': int(((df['retention_risk_score'] > 30) & (df['retention_risk_score'] <= 60)).sum()),
+            'High (61-100)': int((df['retention_risk_score'] > 60).sum())
         }
 
         genius_factor_distribution = {
-            'Poor (0-20)': len(df[df['genius_factor_score'] <= 20]),
-            'Fair (21-40)': len(df[(df['genius_factor_score'] > 20) & (df['genius_factor_score'] <= 40)]),
-            'Good (41-60)': len(df[(df['genius_factor_score'] > 40) & (df['genius_factor_score'] <= 60)]),
-            'Very Good (61-80)': len(df[(df['genius_factor_score'] > 60) & (df['genius_factor_score'] <= 80)]),
-            'Excellent (81-100)': len(df[df['genius_factor_score'] > 80])
+            'Poor (0-20)': int((df['genius_factor_score'] <= 20).sum()),
+            'Fair (21-40)': int(((df['genius_factor_score'] > 20) & (df['genius_factor_score'] <= 40)).sum()),
+            'Good (41-60)': int(((df['genius_factor_score'] > 40) & (df['genius_factor_score'] <= 60)).sum()),
+            'Very Good (61-80)': int(((df['genius_factor_score'] > 60) & (df['genius_factor_score'] <= 80)).sum()),
+            'Excellent (81-100)': int((df['genius_factor_score'] > 80).sum())
         }
 
-        # === MODIFIED MOBILITY DATA SECTION ===
         # Generate last 6 months for trend data
-        from datetime import datetime
         from dateutil.relativedelta import relativedelta
-        
         current_date = datetime.now()
         last_6_months = []
         for i in range(5, -1, -1):  # Last 6 months including current
             month = current_date - relativedelta(months=i)
             last_6_months.append(month.strftime('%Y-%m'))
-        
-        # Initialize mobility data structures
+
+        # Initialize mobility data structures - FIXED
         mobility_trends = {}
-        hr_mobility_trends = {hr_id: {} for hr_id in unique_hr_ids}
-        department_mobility_trends = {dept: {} for dept in unique_departments}
-        
+        hr_mobility_trends = {str(hr_id): {} for hr_id in unique_hr_ids}
+        department_mobility_trends = {str(dept): {} for dept in unique_departments}
+
         # Initialize all months with zero values
         for month in last_6_months:
             mobility_trends[month] = {
@@ -584,21 +631,21 @@ async def admin_dashboard(sid, data):
                 'transfers': 0
             }
             for hr_id in unique_hr_ids:
-                hr_mobility_trends[hr_id][month] = {
+                hr_mobility_trends[str(hr_id)][month] = {
                     'ingoing': 0,
                     'outgoing': 0,
                     'promotions': 0,
                     'transfers': 0
                 }
             for dept in unique_departments:
-                department_mobility_trends[dept][month] = {
+                department_mobility_trends[str(dept)][month] = {
                     'ingoing': 0,
                     'outgoing': 0,
                     'promotions': 0,
                     'transfers': 0
                 }
-        
-        # Process department mobility data
+
+        # Process department mobility data - FIXED
         for dept in departments:
             if not dept.createdAt:
                 continue
@@ -606,122 +653,123 @@ async def admin_dashboard(sid, data):
             dept_month = dept.createdAt.strftime('%Y-%m')
             if dept_month not in last_6_months:
                 continue
-                
+
             # Count ingoing/outgoing
-            ingoing_count = len(dept.ingoing) if dept.ingoing and isinstance(dept.ingoing, list) else 0
-            outgoing_count = len(dept.outgoing) if dept.outgoing and isinstance(dept.outgoing, list) else 0
-            
+            ingoing_count = int(len(dept.ingoing)) if dept.ingoing and isinstance(dept.ingoing, list) else 0
+            outgoing_count = int(len(dept.outgoing)) if dept.outgoing and isinstance(dept.outgoing, list) else 0
+
             # Update overall mobility data
             mobility_trends[dept_month]['ingoing'] += ingoing_count
             mobility_trends[dept_month]['outgoing'] += outgoing_count
+            
             if dept.promotion:
                 mobility_trends[dept_month]['promotions'] += 1
             if dept.transfer:
                 mobility_trends[dept_month]['transfers'] += 1
-            
-            # Update HR-specific mobility data
-            if dept.hrId and dept.hrId in hr_mobility_trends:
-                hr_mobility_trends[dept.hrId][dept_month]['ingoing'] += ingoing_count
-                hr_mobility_trends[dept.hrId][dept_month]['outgoing'] += outgoing_count
-                if dept.promotion:
-                    hr_mobility_trends[dept.hrId][dept_month]['promotions'] += 1
-                if dept.transfer:
-                    hr_mobility_trends[dept.hrId][dept_month]['transfers'] += 1
-            
-            # Update department-specific mobility data
-            if dept.name and dept.name in department_mobility_trends:
-                department_mobility_trends[dept.name][dept_month]['ingoing'] += ingoing_count
-                department_mobility_trends[dept.name][dept_month]['outgoing'] += outgoing_count
-                if dept.promotion:
-                    department_mobility_trends[dept.name][dept_month]['promotions'] += 1
-                if dept.transfer:
-                    department_mobility_trends[dept.name][dept_month]['transfers'] += 1
-        # === END MODIFIED SECTION ===
 
-        # Enhanced Risk Analysis by HR (KEEP EXISTING CODE)
+            # Update HR-specific mobility data
+            if dept.hrId and str(dept.hrId) in hr_mobility_trends:
+                hr_mobility_trends[str(dept.hrId)][dept_month]['ingoing'] += ingoing_count
+                hr_mobility_trends[str(dept.hrId)][dept_month]['outgoing'] += outgoing_count
+                if dept.promotion:
+                    hr_mobility_trends[str(dept.hrId)][dept_month]['promotions'] += 1
+                if dept.transfer:
+                    hr_mobility_trends[str(dept.hrId)][dept_month]['transfers'] += 1
+
+            # Update department-specific mobility data
+            if dept.name and str(dept.name) in department_mobility_trends:
+                department_mobility_trends[str(dept.name)][dept_month]['ingoing'] += ingoing_count
+                department_mobility_trends[str(dept.name)][dept_month]['outgoing'] += outgoing_count
+                if dept.promotion:
+                    department_mobility_trends[str(dept.name)][dept_month]['promotions'] += 1
+                if dept.transfer:
+                    department_mobility_trends[str(dept.name)][dept_month]['transfers'] += 1
+
+        # Enhanced Risk Analysis by HR - FIXED
         risk_analysis_by_hr = {}
         for hr_id in unique_hr_ids:
             hr_reports = df[df['hr_id'] == hr_id]
             hr_employee_details = [e for e in employee_risk_details if e['hr_id'] == hr_id]
-            
-            # Risk distribution
+
+            # Risk distribution - FIXED
             risk_distribution = {
-                'Low (0-30)': len(hr_reports[hr_reports['retention_risk_score'] <= 30]),
-                'Medium (31-60)': len(hr_reports[(hr_reports['retention_risk_score'] > 30) & (hr_reports['retention_risk_score'] <= 60)]),
-                'High (61-100)': len(hr_reports[hr_reports['retention_risk_score'] > 60])
+                'Low (0-30)': int((hr_reports['retention_risk_score'] <= 30).sum()),
+                'Medium (31-60)': int(((hr_reports['retention_risk_score'] > 30) & (hr_reports['retention_risk_score'] <= 60)).sum()),
+                'High (61-100)': int((hr_reports['retention_risk_score'] > 60).sum())
             }
-            
-            # Monthly trend
+
+            # Monthly trend - FIXED
             monthly_trend = {}
             if not hr_reports.empty:
                 hr_monthly = hr_reports.groupby('created_year_month').size()
                 for year_month, count in hr_monthly.items():
-                    monthly_trend[year_month] = int(count)
-            
-            # Department Distribution
+                    monthly_trend[str(year_month)] = int(count)
+
+            # Department Distribution - FIXED
             dept_distribution = {}
             hr_depts = hr_reports['department'].unique()
             for dept in hr_depts:
                 dept_reports = hr_reports[hr_reports['department'] == dept]
-                dept_distribution[dept] = {
-                    'count': len(dept_reports),
-                    'employee_count': dept_reports['employee_id'].nunique(),
-                    'avg_retention_risk': round(dept_reports['retention_risk_score'].mean(), 1) if not dept_reports.empty else 0,
-                    'avg_mobility_score': round(dept_reports['mobility_opportunity_score'].mean(), 1) if not dept_reports.empty else 0,
-                    'avg_genius_factor': round(dept_reports['genius_factor_score'].mean(), 1) if not dept_reports.empty else 0,
+                dept_distribution[str(dept)] = {
+                    'count': int(len(dept_reports)),
+                    'employee_count': int(dept_reports['employee_id'].nunique()),
+                    'avg_retention_risk': float(round(dept_reports['retention_risk_score'].mean(), 1)) if not dept_reports.empty else 0.0,
+                    'avg_mobility_score': float(round(dept_reports['mobility_opportunity_score'].mean(), 1)) if not dept_reports.empty else 0.0,
+                    'avg_genius_factor': float(round(dept_reports['genius_factor_score'].mean(), 1)) if not dept_reports.empty else 0.0,
                     'risk_distribution': {
-                        'Low (0-30)': len(dept_reports[dept_reports['retention_risk_score'] <= 30]),
-                        'Medium (31-60)': len(dept_reports[(dept_reports['retention_risk_score'] > 30) & (dept_reports['retention_risk_score'] <= 60)]),
-                        'High (61-100)': len(dept_reports[dept_reports['retention_risk_score'] > 60])
+                        'Low (0-30)': int((dept_reports['retention_risk_score'] <= 30).sum()),
+                        'Medium (31-60)': int(((dept_reports['retention_risk_score'] > 30) & (dept_reports['retention_risk_score'] <= 60)).sum()),
+                        'High (61-100)': int((dept_reports['retention_risk_score'] > 60).sum())
                     },
                     'genius_factor_distribution': {
-                        'Poor (0-20)': len(dept_reports[dept_reports['genius_factor_score'] <= 20]),
-                        'Fair (21-40)': len(dept_reports[(dept_reports['genius_factor_score'] > 20) & (dept_reports['genius_factor_score'] <= 40)]),
-                        'Good (41-60)': len(dept_reports[(dept_reports['genius_factor_score'] > 40) & (dept_reports['genius_factor_score'] <= 60)]),
-                        'Very Good (61-80)': len(dept_reports[(dept_reports['genius_factor_score'] > 60) & (dept_reports['genius_factor_score'] <= 80)]),
-                        'Excellent (81-100)': len(dept_reports[dept_reports['genius_factor_score'] > 80])
+                        'Poor (0-20)': int((dept_reports['genius_factor_score'] <= 20).sum()),
+                        'Fair (21-40)': int(((dept_reports['genius_factor_score'] > 20) & (dept_reports['genius_factor_score'] <= 40)).sum()),
+                        'Good (41-60)': int(((dept_reports['genius_factor_score'] > 40) & (dept_reports['genius_factor_score'] <= 60)).sum()),
+                        'Very Good (61-80)': int(((dept_reports['genius_factor_score'] > 60) & (dept_reports['genius_factor_score'] <= 80)).sum()),
+                        'Excellent (81-100)': int((dept_reports['genius_factor_score'] > 80).sum())
                     }
                 }
-            
-            risk_analysis_by_hr[hr_id] = {
+
+            risk_analysis_by_hr[str(hr_id)] = {
                 'risk_distribution': risk_distribution,
                 'monthly_trend': monthly_trend,
                 'department_distribution': dept_distribution,
                 'employee_risk_details': hr_employee_details,
-                'total_reports': len(hr_reports),
-                'total_employees': hr_reports['employee_id'].nunique(),
-                'avg_retention_risk': round(hr_reports['retention_risk_score'].mean(), 1) if not hr_reports.empty else 0
+                'total_reports': int(len(hr_reports)),
+                'total_employees': int(hr_reports['employee_id'].nunique()),
+                'avg_retention_risk': float(round(hr_reports['retention_risk_score'].mean(), 1)) if not hr_reports.empty else 0.0
             }
 
-        # Calculate overall averages (KEEP EXISTING CODE)
-        overall_avg_retention_risk = round(df['retention_risk_score'].mean(), 1) if not df.empty else 0
-        overall_avg_mobility = round(df['mobility_opportunity_score'].mean(), 1) if not df.empty else 0
-        overall_avg_genius = round(df['genius_factor_score'].mean(), 1) if not df.empty else 0
+        # Calculate overall averages - FIXED
+        overall_avg_retention_risk = float(round(df['retention_risk_score'].mean(), 1)) if not df.empty else 0.0
+        overall_avg_mobility = float(round(df['mobility_opportunity_score'].mean(), 1)) if not df.empty else 0.0
+        overall_avg_genius = float(round(df['genius_factor_score'].mean(), 1)) if not df.empty else 0.0
 
-        # Prepare chart data for department-specific HR analysis (KEEP EXISTING CODE)
+        # Prepare chart data for department-specific HR analysis - FIXED
         hr_dept_chart_data = {}
         for hr_id in unique_hr_ids:
-            hr_dept_chart_data[hr_id] = {
+            hr_dept_chart_data[str(hr_id)] = {
                 'departments': {},
-                'risk_distribution': risk_analysis_by_hr[hr_id]['risk_distribution'],
-                'monthly_trend': risk_analysis_by_hr[hr_id]['monthly_trend']
+                'risk_distribution': risk_analysis_by_hr[str(hr_id)]['risk_distribution'],
+                'monthly_trend': risk_analysis_by_hr[str(hr_id)]['monthly_trend']
             }
-            for dept in risk_analysis_by_hr[hr_id]['department_distribution']:
-                hr_dept_chart_data[hr_id]['departments'][dept] = {
-                    'avg_retention_risk': risk_analysis_by_hr[hr_id]['department_distribution'][dept]['avg_retention_risk'],
-                    'avg_mobility_score': risk_analysis_by_hr[hr_id]['department_distribution'][dept]['avg_mobility_score'],
-                    'avg_genius_factor': risk_analysis_by_hr[hr_id]['department_distribution'][dept]['avg_genius_factor'],
-                    'risk_distribution': risk_analysis_by_hr[hr_id]['department_distribution'][dept]['risk_distribution'],
-                    'genius_factor_distribution': risk_analysis_by_hr[hr_id]['department_distribution'][dept]['genius_factor_distribution']
+
+            for dept in risk_analysis_by_hr[str(hr_id)]['department_distribution']:
+                hr_dept_chart_data[str(hr_id)]['departments'][str(dept)] = {
+                    'avg_retention_risk': risk_analysis_by_hr[str(hr_id)]['department_distribution'][dept]['avg_retention_risk'],
+                    'avg_mobility_score': risk_analysis_by_hr[str(hr_id)]['department_distribution'][dept]['avg_mobility_score'],
+                    'avg_genius_factor': risk_analysis_by_hr[str(hr_id)]['department_distribution'][dept]['avg_genius_factor'],
+                    'risk_distribution': risk_analysis_by_hr[str(hr_id)]['department_distribution'][dept]['risk_distribution'],
+                    'genius_factor_distribution': risk_analysis_by_hr[str(hr_id)]['department_distribution'][dept]['genius_factor_distribution']
                 }
 
-        # Prepare the response (MODIFIED MOBILITY SECTION)
+        # Prepare the response - FIXED
         response_data = {
             'overallMetrics': {
                 'total_reports': total_reports,
-                'total_employees': df['employee_id'].nunique(),
-                'total_hr_ids': len(unique_hr_ids),
-                'total_departments': len(unique_departments),
+                'total_employees': int(df['employee_id'].nunique()),
+                'total_hr_ids': int(len(unique_hr_ids)),
+                'total_departments': int(len(unique_departments)),
                 'avg_retention_risk': overall_avg_retention_risk,
                 'avg_mobility_score': overall_avg_mobility,
                 'avg_genius_factor': overall_avg_genius,
@@ -741,22 +789,25 @@ async def admin_dashboard(sid, data):
             'employeeRiskDetails': employee_risk_details
         }
 
+        # Apply final safe serialization
+        safe_response = safe_serialize(response_data)
+        
         # Emit the admin dashboard data
-        await sio.emit('reports_info', response_data, to=sid)
-
-        print(f"✅ Admin dashboard data sent: {total_reports} reports, {df['employee_id'].nunique()} employees, {len(unique_hr_ids)} HR IDs, {len(unique_departments)} departments")
+        await sio.emit('reports_info', safe_response, to=sid)
+        print(f"✅ Admin dashboard data sent successfully")
 
     except Exception as e:
         error_msg = f"Error in admin_dashboard: {str(e)}"
-        print(error_msg)
+        print(f"❌ {error_msg}")
         await sio.emit('reports_info', {'error': error_msg}, to=sid)
-
     finally:
-        if 'prisma' in locals() and prisma.is_connected():
+        if prisma and prisma.is_connected():
             await prisma.disconnect()
 
 @sio.event
 async def admin_internal_mobility_analysis(sid, data):
+    """FIXED admin internal mobility analysis"""
+    prisma = None
     try:
         admin_id = data.get('adminId')
         if not admin_id:
@@ -765,7 +816,6 @@ async def admin_internal_mobility_analysis(sid, data):
 
         prisma = Prisma()
         await prisma.connect()
-
         departments = await prisma.department.find_many()
 
         if not departments:
@@ -776,14 +826,13 @@ async def admin_internal_mobility_analysis(sid, data):
         current_date = datetime.now(timezone.utc)
         
         # Calculate 6 months ago (including current month)
-        # We want current month + previous 5 months = 6 months total
         six_months_ago = current_date.replace(day=1)  # Start of current month
         for _ in range(5):  # Go back 5 more months to get total of 6
             if six_months_ago.month == 1:
                 six_months_ago = six_months_ago.replace(year=six_months_ago.year - 1, month=12)
             else:
                 six_months_ago = six_months_ago.replace(month=six_months_ago.month - 1)
-        
+
         # Generate all months in the 6-month period (including current month)
         all_months = []
         temp_date = six_months_ago.replace(day=1)
@@ -793,15 +842,15 @@ async def admin_internal_mobility_analysis(sid, data):
                 temp_date = temp_date.replace(year=temp_date.year + 1, month=1)
             else:
                 temp_date = temp_date.replace(month=temp_date.month + 1)
-        
-        # Initialize data structures
+
+        # Initialize data structures - FIXED
         hr_stats = {}
         monthly_trends = {month: {'incoming': 0, 'outgoing': 0} for month in all_months}
 
         for dept in departments:
-            hr_id = dept.hrId
-            dept_name = dept.name
-            
+            hr_id = str(dept.hrId)
+            dept_name = str(dept.name)
+
             # Initialize HR stats
             if hr_id not in hr_stats:
                 hr_stats[hr_id] = {
@@ -813,7 +862,7 @@ async def admin_internal_mobility_analysis(sid, data):
                     'total_movements': 0,
                     'monthly_trends': {month: {'incoming': 0, 'outgoing': 0} for month in all_months}
                 }
-            
+
             # Initialize department within HR stats
             if dept_name not in hr_stats[hr_id]['departments']:
                 hr_stats[hr_id]['departments'][dept_name] = {
@@ -827,7 +876,6 @@ async def admin_internal_mobility_analysis(sid, data):
             if dept.promotion and dept.promotion.lower() == 'true':
                 movement_date = dept.updatedAt or dept.createdAt or current_date
                 movement_month = movement_date.strftime('%Y-%m')
-                
                 if movement_month in all_months:  # Only count if within our 6-month range
                     hr_stats[hr_id]['promotions'] += 1
                     hr_stats[hr_id]['departments'][dept_name]['promotions'] += 1
@@ -845,7 +893,6 @@ async def admin_internal_mobility_analysis(sid, data):
             if dept.transfer and dept.transfer.lower() == 'outgoing':
                 movement_date = dept.updatedAt or dept.createdAt or current_date
                 movement_month = movement_date.strftime('%Y-%m')
-                
                 if movement_month in all_months:  # Only count if within our 6-month range
                     hr_stats[hr_id]['transfers'] += 1
                     hr_stats[hr_id]['departments'][dept_name]['transfers'] += 1
@@ -865,7 +912,6 @@ async def admin_internal_mobility_analysis(sid, data):
                     if isinstance(movement, dict):
                         movement_date = parse_date(movement.get('timestamp')) or dept.updatedAt or dept.createdAt or current_date
                         movement_month = movement_date.strftime('%Y-%m')
-                        
                         if movement_month in all_months:  # Only count if within our 6-month range
                             hr_stats[hr_id]['incoming'] += 1
                             hr_stats[hr_id]['departments'][dept_name]['incoming'] += 1
@@ -876,7 +922,7 @@ async def admin_internal_mobility_analysis(sid, data):
                                 hr_stats[hr_id]['monthly_trends'][movement_month]['incoming'] += 1
                             if movement_month in monthly_trends:
                                 monthly_trends[movement_month]['incoming'] += 1
-                            
+
                             # Check if this is a transfer
                             if movement.get('userId') and movement.get('userId') != dept.userId:
                                 hr_stats[hr_id]['transfers'] += 1
@@ -888,7 +934,6 @@ async def admin_internal_mobility_analysis(sid, data):
                     if isinstance(movement, dict):
                         movement_date = parse_date(movement.get('timestamp')) or dept.updatedAt or dept.createdAt or current_date
                         movement_month = movement_date.strftime('%Y-%m')
-                        
                         if movement_month in all_months:  # Only count if within our 6-month range
                             hr_stats[hr_id]['outgoing'] += 1
                             hr_stats[hr_id]['departments'][dept_name]['outgoing'] += 1
@@ -899,34 +944,34 @@ async def admin_internal_mobility_analysis(sid, data):
                                 hr_stats[hr_id]['monthly_trends'][movement_month]['outgoing'] += 1
                             if movement_month in monthly_trends:
                                 monthly_trends[movement_month]['outgoing'] += 1
-                            
+
                             # This is always a transfer
                             hr_stats[hr_id]['transfers'] += 1
                             hr_stats[hr_id]['departments'][dept_name]['transfers'] += 1
 
-        # Convert monthly trends to sorted list format
+        # Convert monthly trends to sorted list format - FIXED
         monthly_trends_list = []
         for month in all_months:
             monthly_trends_list.append({
                 'month': month,
-                'incoming': monthly_trends[month]['incoming'],
-                'outgoing': monthly_trends[month]['outgoing'],
-                'total': monthly_trends[month]['incoming'] + monthly_trends[month]['outgoing']
+                'incoming': int(monthly_trends[month]['incoming']),
+                'outgoing': int(monthly_trends[month]['outgoing']),
+                'total': int(monthly_trends[month]['incoming'] + monthly_trends[month]['outgoing'])
             })
 
-        # Convert HR monthly trends to sorted list format
+        # Convert HR monthly trends to sorted list format - FIXED
         for hr_id in hr_stats:
             hr_monthly_list = []
             for month in all_months:
                 hr_monthly_list.append({
                     'month': month,
-                    'incoming': hr_stats[hr_id]['monthly_trends'][month]['incoming'],
-                    'outgoing': hr_stats[hr_id]['monthly_trends'][month]['outgoing'],
-                    'total': hr_stats[hr_id]['monthly_trends'][month]['incoming'] + hr_stats[hr_id]['monthly_trends'][month]['outgoing']
+                    'incoming': int(hr_stats[hr_id]['monthly_trends'][month]['incoming']),
+                    'outgoing': int(hr_stats[hr_id]['monthly_trends'][month]['outgoing']),
+                    'total': int(hr_stats[hr_id]['monthly_trends'][month]['incoming'] + hr_stats[hr_id]['monthly_trends'][month]['outgoing'])
                 })
             hr_stats[hr_id]['monthly_trends'] = hr_monthly_list
 
-        # Prepare response
+        # Prepare response - FIXED
         response_data = {
             'hr_stats': hr_stats,
             'overall_monthly_trends': monthly_trends_list,
@@ -937,20 +982,22 @@ async def admin_internal_mobility_analysis(sid, data):
             }
         }
 
-        await sio.emit('mobility_analysis', response_data, to=sid)
-        print(f"✅ Mobility analysis with trends completed for {len(all_months)} months: {all_months}")
+        # Apply final safe serialization
+        safe_response = safe_serialize(response_data)
+        
+        await sio.emit('mobility_analysis', safe_response, to=sid)
+        print(f"✅ Admin mobility analysis sent successfully")
 
     except Exception as e:
         error_msg = f"Error: {str(e)}"
-        print(error_msg)
+        print(f"❌ {error_msg}")
         await sio.emit('mobility_analysis', {'error': error_msg}, to=sid)
-
     finally:
-        if 'prisma' in locals() and prisma.is_connected():
+        if prisma and prisma.is_connected():
             await prisma.disconnect()
 
 def parse_date(date_str):
-    """Simple date parser that ensures timezone awareness"""
+    """Simple date parser that ensures timezone awareness - FIXED"""
     if not date_str:
         return None
     try:
@@ -961,8 +1008,9 @@ def parse_date(date_str):
     except Exception as e:
         print(f"Date parsing error: {e}")
         return None
+
 def generate_month_range(start_date, end_date):
-    """Generate list of months between two dates in YYYY-MM format"""
+    """Generate list of months between two dates in YYYY-MM format - FIXED"""
     months = []
     current = start_date
     while current <= end_date:
@@ -1122,10 +1170,17 @@ async def department_analysis(sid, data):
             await prisma.disconnect()
 @sio.event
 async def get_rooms(sid):
-    """Debug endpoint to see all rooms"""
-    if hasattr(sio, 'manager') and sio.manager.rooms:
-        rooms = {str(room): list(sids) for room, sids in sio.manager.rooms.items()}
-        print("🏠 All rooms:", rooms)
-        await sio.emit('rooms_info', {'rooms': rooms}, to=sid)
-    else:
-        await sio.emit('rooms_info', {'error': 'No manager available'}, to=sid)
+    """Debug endpoint to see all rooms - FIXED"""
+    try:
+        if hasattr(sio, 'manager') and sio.manager.rooms:
+            rooms = {str(room): [str(sid) for sid in sids] for room, sids in sio.manager.rooms.items()}
+            response_data = {'rooms': rooms}
+        else:
+            response_data = {'error': 'No manager available'}
+        
+        safe_response = safe_serialize(response_data)
+        await sio.emit('rooms_info', safe_response, to=sid)
+        
+    except Exception as e:
+        print(f"❌ Error in get_rooms: {e}")
+        await sio.emit('rooms_info', {'error': 'Failed to get rooms'}, to=sid)
