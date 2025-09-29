@@ -79,8 +79,9 @@ class ChatService:
                 include={"employee": True}
             )
             report = await self.prisma.individualemployeereport.find_first(
-                where={"userId": user_id}
-            )
+        where={"userId": user_id},
+        order={"createdAt": "desc"}   # 👈 Order by most recent
+    )
             user_dict = user.dict() if user else {}
             report_dict = report.dict() if report else {}
             employee_data = {
