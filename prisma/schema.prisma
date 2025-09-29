@@ -219,3 +219,13 @@ model ChatConversation {
   @@unique([hr_id, department])
   @@map("chat_conversations")
 }
+
+
+model EmployeeChat {
+  id        String   @id @default(uuid())
+  userId    String
+  message   String
+  response  String?
+  createdAt DateTime @default(now())
+
+}
