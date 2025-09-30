@@ -11,6 +11,7 @@ from controllers.job_controller import router as job_router
 from controllers.employee_parse_controller import router as employee_router
 # from controllers.chat_controller import router as chat_router  # Use ChatController router
 from controllers.employee_controllers.chat_controller import router as chat_router  # Use ChatController router
+from routes.hr_routes.chat_route import router as hr_chat_router
 from routes.hr_routes.intervation_routes import router as analysis_router
 from routes.hr_routes.department_summary_route import router as department_router
 from routes.employee_route.recommendation_course import router as recommendation_course_router
@@ -48,6 +49,7 @@ app.include_router(test_db_router, prefix="/test", tags=["testing"])
 app.include_router(job_router)
 app.include_router(employee_router)
 app.include_router(chat_router)  # Include ChatController router
+app.include_router(hr_chat_router)
 app.include_router(analysis_router)
 app.include_router(department_router)
 app.include_router(recommendation_course_router)
