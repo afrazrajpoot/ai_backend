@@ -112,6 +112,7 @@ class LLMService:
         """
         # Perform LLM analysis
         analysis_result = await self.analyze_retention_risk(departments_data)
+        print(analysis_result,'analysis result')
 
         # Save each department's analysis to database
         for dept_recommendation in analysis_result.get('department_recommendations', []):
