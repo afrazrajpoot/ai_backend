@@ -1,21 +1,24 @@
 import os
 import json
 import logging
-import numpy as np
 from typing import List, Dict, Optional, Any
 from dataclasses import dataclass
 import re
+from collections import defaultdict
 
 from prisma import Prisma
-from langchain_openai import OpenAIEmbeddings
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_community.vectorstores import FAISS
 from langchain.schema import Document
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
+from langchain.prompts import PromptTemplate
+from langchain.chains import LLMChain
 
 logger = logging.getLogger(__name__)
 
-INDEX_DIR = os.getenv("JOBS_FAISS_DIR", "./faiss_jobs_index")
+# Ensure INDEX_DIR is relative to project root
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+INDEX_DIR = os.getenv("JOBS_FAISS_DIR", os.path.join(PROJECT_ROOT, "faiss_jobs_index"))
+
 TOP_K = int(os.getenv("JOBS_RETRIEVE_TOP_K", "25"))
 
 
@@ -67,8 +70,9 @@ class JobVectorStore:
         if self._loaded and self.vs:
             return  # Already built
 
-        # Ensure directory exists
+        # Ensure directory exists in project root
         os.makedirs(INDEX_DIR, exist_ok=True)
+        logger.info(f"FAISS index directory ensured: {INDEX_DIR}")
 
         # Try loading persisted index - check if index files actually exist
         index_file = os.path.join(INDEX_DIR, "index.faiss")
@@ -77,7 +81,7 @@ class JobVectorStore:
         if os.path.exists(index_file) and os.path.exists(pkl_file):
             try:
                 self.vs = FAISS.load_local(INDEX_DIR, self.embeddings, allow_dangerous_deserialization=True)
-             
+                logger.info("FAISS index loaded successfully.")
                 self._loaded = True
                 return
             except Exception as e:
@@ -93,7 +97,10 @@ class JobVectorStore:
                     logger.warning(f"Failed to cleanup corrupted files: {cleanup_error}")
 
 
+        logger.info("Building FAISS index for the first time...")
         jobs = await db.job.find_many()
+        logger.info(f"Found {len(jobs)} jobs for indexing.")
+        # print(jobs,'jobs found for recommendation')
         docs: List[Document] = [self._job_to_document(JobRow(
             id=j.id,
             title=j.title,
@@ -104,15 +111,17 @@ class JobVectorStore:
         )) for j in jobs]
 
         if not docs:
+            logger.warning("No jobs found to index. Creating placeholder index.")
             self.vs = FAISS.from_texts(["NO_JOBS"], self.embeddings, metadatas=[{"placeholder": True}])
-          
         else:
             self.vs = FAISS.from_documents(docs, self.embeddings)
+            logger.info(f"Indexed {len(docs)} job documents.")
     
 
         # Save the index
         try:
             self.vs.save_local(INDEX_DIR)
+            logger.info(f"FAISS index saved successfully to {INDEX_DIR}.")
        
         except Exception as e:
             logger.error(f"Failed to save FAISS index: {e}")
@@ -140,8 +149,8 @@ class JobVectorStore:
         scored_jobs = []
         for doc, score in results:
             if doc.metadata.get("recruiterId") == recruiter_id:
-                # Convert distance to similarity score (0-100)
-                similarity_score = (1 - min(score, 1.0)) * 100
+                # Convert distance to similarity score (0-100), ensure float
+                similarity_score = float((1 - min(float(score), 1.0)) * 100)
                 scored_jobs.append({
                     'title': doc.metadata.get('title'),
                     'match_score': similarity_score,
@@ -153,17 +162,33 @@ class JobVectorStore:
 
 class JobRecommendationService:
     """
-    Job recommendation using TF-IDF + cosine similarity + feature engineering
+    Job recommendation using LangChain LLM for similarity scoring
     """
     def __init__(self):
         self.embeddings = OpenAIEmbeddings()
+        self.llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
         self.vstore = JobVectorStore.get(self.embeddings)
-        self.tfidf_vectorizer = TfidfVectorizer(
-            stop_words='english', 
-            max_features=5000,
-            min_df=2,
-            max_df=0.8
+        
+        # Prompt template for batch LLM scoring
+        self.scoring_prompt = PromptTemplate(
+            input_variables=["employee_profile", "jobs_list"],
+            template="""
+You are an expert job matching AI. Analyze how well each of the following jobs matches the employee's profile.
+
+Employee Profile: {employee_profile}
+
+Jobs:
+{jobs_list}
+
+Provide match scores for each job in JSON format, using the exact title as key and integer score (0-100) as value:
+{{"Title of Job 1": 85, "Title of Job 2": 70, ...}}
+
+100 is perfect match. Consider skills, experience, education, department, position alignment.
+
+Respond ONLY with the JSON object.
+"""
         )
+        self.scoring_chain = LLMChain(llm=self.llm, prompt=self.scoring_prompt)
     
     def _extract_features(self, employee_info: Dict[str, Any]) -> Dict[str, Any]:
         """Extract and preprocess features from employee data"""
@@ -193,125 +218,72 @@ class JobRecommendationService:
         
         features['skills_list'] = [str(skill).lower() for skill in employee_info.get('skills', [])]
         
+        # Create a formatted employee profile for LLM
+        features['employee_profile'] = (
+            f"Name: {employee_info.get('firstName', '')} {employee_info.get('lastName', '')}\n"
+            f"Bio: {employee_info.get('bio', '')}\n"
+            f"Skills: {', '.join(employee_info.get('skills', []))}\n"
+            f"Education: {', '.join(employee_info.get('education', []))}\n"
+            f"Experience: {', '.join(employee_info.get('experience', []))}\n"
+            f"Position: {', '.join(employee_info.get('position', []))}\n"
+            f"Department: {', '.join(employee_info.get('department', []))}\n"
+            f"Salary Expectation: {employee_info.get('salary', 'Not specified')}"
+        )
+        
+        # Optimized query for FAISS retrieval focusing on skills, department, position
+        features['optimized_query'] = (
+            f"skills: {skills} department: {features['department']} position: {features['position']} "
+            f"experience: {experience} education: {education}"
+        ).strip()
+        
         return features
     
-    def _calculate_similarity(self, employee_features: Dict[str, Any], job_docs: List[Document]) -> List[Dict[str, Any]]:
-        """Calculate similarity scores between employee and jobs using multiple techniques"""
+    def _calculate_similarity(self, employee_features: Dict[str, Any], job_docs: List[Document], emb_score_dict: Dict[str, float]) -> List[Dict[str, Any]]:
+        """Calculate similarity scores using batch LLM"""
         if not job_docs:
             return []
         
-        # Method 1: FAISS embedding similarity
-        query_text = employee_features['text_data']
-        recruiter_id = job_docs[0].metadata.get("recruiterId") if job_docs else ""
-        embedding_scores = self.vstore.retrieve_jobs_with_scores(query_text, recruiter_id, k=len(job_docs))
+        # Batch LLM scoring
+        jobs_list = "\n".join([
+            f"{i+1}. Title: {doc.metadata['title']}\nDescription: {doc.page_content}" 
+            for i, doc in enumerate(job_docs)
+        ])
         
-        # Method 2: TF-IDF similarity
-        job_texts = [doc.page_content.lower() for doc in job_docs]
-        all_texts = [employee_features['text_data']] + job_texts
-        
+        llm_score_dict = {}
         try:
-            tfidf_matrix = self.tfidf_vectorizer.fit_transform(all_texts)
-            employee_tfidf = tfidf_matrix[0:1]
-            job_tfidfs = tfidf_matrix[1:]
-            tfidf_similarities = cosine_similarity(employee_tfidf, job_tfidfs).flatten() * 100
+            llm_response = self.scoring_chain.run(
+                employee_profile=employee_features['employee_profile'],
+                jobs_list=jobs_list
+            )
+            # Parse JSON response
+            parsed = json.loads(llm_response.strip())
+            llm_score_dict = {k: float(v) for k, v in parsed.items() if isinstance(v, (int, float))}
+            logger.info("Batch LLM scoring successful.")
         except Exception as e:
-            logger.warning(f"TF-IDF failed: {e}")
-            tfidf_similarities = np.zeros(len(job_docs))
+            logger.warning(f"Batch LLM scoring failed: {e}. Using default scores.")
+            llm_score_dict = {doc.metadata['title']: 50.0 for doc in job_docs}
         
         enhanced_scores = []
-        
-        for i, doc in enumerate(job_docs):
-            job_content = doc.page_content.lower()
-            
-            # Get embedding score if available
-            embedding_score = 0
-            for emb_score in embedding_scores:
-                if emb_score['title'] == doc.metadata.get('title'):
-                    embedding_score = emb_score['match_score']
-                    break
-            
-            # Keyword matching for skills
-            skills_match = 0
-            if employee_features['skills_list']:
-                skills_found = sum(1 for skill in employee_features['skills_list'] 
-                                 if skill and skill in job_content)
-                skills_match = (skills_found / len(employee_features['skills_list'])) * 100
-            
-            # Department matching (check if any department appears in job content)
-            dept_match = 30  # Default score
-            if employee_features['department']:
-                dept_words = employee_features['department'].split()
-                dept_found = any(dept_word in job_content for dept_word in dept_words if dept_word)
-                dept_match = 100 if dept_found else 30
-            
-            # Position matching (check if any position appears in job content)
-            position_match = 30  # Default score
-            if employee_features['position']:
-                position_words = employee_features['position'].split()
-                position_found = any(pos_word in job_content for pos_word in position_words if pos_word)
-                position_match = 100 if position_found else 30
-            
-            # Combine scores (weighted average)
-            final_score = (
-                0.4 * embedding_score +
-                0.3 * tfidf_similarities[i] +
-                0.15 * skills_match +
-                0.075 * dept_match +
-                0.075 * position_match
-            )
-            
+        for doc in job_docs:
+            title = doc.metadata['title']
+            embedding_score = float(emb_score_dict.get(title, 0.0))
+            llm_score = llm_score_dict.get(title, 50.0)
+            final_score = 0.3 * embedding_score + 0.7 * llm_score
             enhanced_scores.append({
-                'title': doc.metadata.get('title'),
-                'match_score': min(100, max(0, round(final_score, 2))),
+                'id': doc.metadata['id'],
+                'title': title,
+                'match_score': min(100.0, max(0.0, round(final_score, 2))),
                 'document': doc
             })
         
         return enhanced_scores
-    
-    def _simple_keyword_matching(self, employee_features: Dict[str, Any], job_docs: List[Document]) -> List[Dict[str, Any]]:
-        """Fallback method using simple keyword matching"""
-        scored_jobs = []
-        
-        for doc in job_docs:
-            job_content = doc.page_content.lower()
-            score = 0
-            
-            # Count matching skills
-            skills = employee_features.get('skills_list', [])
-            if skills:
-                skills_found = sum(1 for skill in skills if skill and skill in job_content)
-                score += (skills_found / len(skills)) * 40
-            
-            # Check department match (any department word)
-            dept_text = employee_features.get('department', '')
-            if dept_text:
-                dept_words = dept_text.split()
-                dept_found = any(dept_word in job_content for dept_word in dept_words if dept_word)
-                if dept_found:
-                    score += 30
-            
-            # Check position match (any position word)
-            position_text = employee_features.get('position', '')
-            if position_text:
-                position_words = position_text.split()
-                position_found = any(pos_word in job_content for pos_word in position_words if pos_word)
-                if position_found:
-                    score += 30
-            
-            scored_jobs.append({
-                'title': doc.metadata.get('title'),
-                'match_score': min(100, score),
-                'document': doc
-            })
-        
-        return scored_jobs
 
     async def recommend_jobs_for_employee(self, user_id: str, recruiter_id: str) -> List[Dict[str, Any]]:
         db = Prisma()
         await db.connect()
         
         try:
-            # Build/load FAISS store
+            # Build/load FAISS store (this will create directory and save first time if needed)
             await self.vstore.build_or_load(db)
             
             # Fetch user data with proper handling of array fields
@@ -339,35 +311,57 @@ class JobRecommendationService:
             # Extract features
             employee_features = self._extract_features(employee_info)
             
-            # Retrieve jobs using the original query text for FAISS
-            query_text = json.dumps(employee_info)
-            retrieved_docs = self.vstore.retrieve_jobs(query_text, recruiter_id, k=TOP_K)
+            # Retrieve jobs using the optimized query for FAISS
+            query_text = employee_features['optimized_query']
+            embedding_scored = self.vstore.retrieve_jobs_with_scores(query_text, recruiter_id, k=TOP_K)
             
-            if not retrieved_docs:
-             
+            if not embedding_scored:
                 return []
             
-            # Calculate similarity scores
-            try:
-                recommended_jobs = self._calculate_similarity(employee_features, retrieved_docs)
-            except Exception as e:
-                logger.warning(f"Advanced similarity failed, using fallback: {e}")
-                recommended_jobs = self._simple_keyword_matching(employee_features, retrieved_docs)
+            # Deduplicate by title: pick the best embedding score per title
+            title_groups = defaultdict(list)
+            for item in embedding_scored:
+                title_groups[item['title']].append(item)
             
-            # Get final job details from database
-            titles = [j['title'] for j in recommended_jobs]
-            if not titles:
+            unique_items = []
+            emb_score_dict = {}
+            for title, group in title_groups.items():
+                best_item = max(group, key=lambda x: x['match_score'])
+                unique_items.append(best_item)
+                emb_score_dict[title] = best_item['match_score']
+            
+            unique_docs = [item['document'] for item in unique_items]
+            
+            # Calculate similarity scores using LLM (batched)
+            try:
+                recommended_jobs = self._calculate_similarity(employee_features, unique_docs, emb_score_dict)
+            except Exception as e:
+                logger.warning(f"LLM similarity failed: {e}")
+                # Fallback to embedding scores only
+                recommended_jobs = [
+                    {
+                        'id': item['document'].metadata['id'],
+                        'title': item['title'],
+                        'match_score': item['match_score'],
+                        'document': item['document']
+                    }
+                    for item in unique_items
+                ]
+            
+            # Get final job details from database by ID
+            ids = [j['id'] for j in recommended_jobs]
+            if not ids:
                 return []
                 
             final_jobs = await db.job.find_many(
-                where={"recruiterId": recruiter_id, "title": {"in": titles}},
+                where={"id": {"in": ids}},
                 include={"recruiter": True}
             )
             
             # Merge with scores
             final_jobs_with_scores = []
             for job in final_jobs:
-                score_data = next((r for r in recommended_jobs if r['title'] == job.title), None)
+                score_data = next((r for r in recommended_jobs if r['id'] == job.id), None)
                 if score_data:
                     final_jobs_with_scores.append({
                         "id": job.id,
@@ -376,7 +370,7 @@ class JobRecommendationService:
                         "recruiterId": job.recruiterId,
                         "location": job.location,
                         "type": job.type,
-                        "match_score": score_data['match_score'],
+                        "match_score": float(score_data['match_score']),
                         "salary": job.salary,
                         "recruiter": {
                             "id": job.recruiter.id if job.recruiter else None,

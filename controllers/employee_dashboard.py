@@ -125,7 +125,7 @@ class DashboardController:
 
             recommendation = JobRecommendationService()
             recommendations = await recommendation.recommend_jobs_for_employee(employee_id, recruiter_id)
-   
+            print(recommendations,'recommendations')
             return {"recommendations": recommendations}
         except Exception as e:
             logger.error(f"Error in recommend: {str(e)}")

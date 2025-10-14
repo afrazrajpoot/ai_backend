@@ -7,6 +7,7 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+
 model User {
   id            String      @id @default(uuid())
   firstName     String?
@@ -32,8 +33,11 @@ model User {
   // Jobs posted by this user (Recruiter)
   jobs          Job[]       @relation("RecruiterJobs")
 
-  // Applications submitted by this user (Candidate)
+  // Applications submitted by this user (Candidate/Employee)
   applications  Application[] 
+
+  // Denormalized array of applied job IDs for employees
+  appliedJobIds String[]
 }
 model Department {
   id      String   @id @default(uuid())
@@ -141,6 +145,7 @@ model Job {
   salary         Int?
   type           JobType     @default(FULL_TIME)
   status         JobStatus   @default(OPEN)
+  skills         Json?       // Optional JSON field for skills array (e.g., ["skill1", "skill2"] or null)
   createdAt      DateTime    @default(now())
   updatedAt      DateTime    @updatedAt
 
@@ -150,23 +155,27 @@ model Job {
 
   // Applications for this job
   applications   Application[]
+  
 }
+
+
 
 model Application {
   id          String   @id @default(uuid())
-  coverLetter String?
-  resumeUrl   String?
   createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relation to User (Applicant)
+  user        User     @relation(fields: [userId], references: [id])
+  userId      String
 
   // Relation to Job
-  job       Job    @relation(fields: [jobId], references: [id])
-  jobId     String
-
-  // Relation to Candidate (User)
-  candidate User   @relation(fields: [candidateId], references: [id])
-  candidateId String
+  job         Job      @relation(fields: [jobId], references: [id])
+  jobId       String
+  hrId        String?
+  aiRecommendation  String?
+  scoreMatch  String?
 }
-
 model AiCareerRecommendation {
   id             String      @id @default(uuid())
   employeeId   String

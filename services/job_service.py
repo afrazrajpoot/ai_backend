@@ -55,7 +55,6 @@ async def parse_and_save_jobs(file, recruiter_id: str):
         raise ValueError("File has no rows")
 
     # --- Debug ---
- 
     for r in rows[:5]:
         print(r)
 
@@ -66,26 +65,49 @@ async def parse_and_save_jobs(file, recruiter_id: str):
     for idx, row in enumerate(rows):
         title = str(row.get("title", "")).strip()
         if not title:
-         
             continue
 
         try:
-            job = await db.job.create(
-                data={
-                    "title": title,
-                    "description": str(row.get("description", "")),
-                    "location": str(row.get("location", "")) if row.get("location") else None,
-                    "salary": int(row.get("salary", 0)) if row.get("salary") else None,
-                    "type": str(row.get("type", "FULL_TIME")),
-                    "status": "OPEN",
-                    "recruiterId": recruiter_id,
-                }
-            )
+            # Handle skills: extract as list if present, otherwise omit (for null)
+            skills_raw = row.get("skills")
+            skills_data = None
+            if skills_raw:
+                skills_list = [s.strip() for s in str(skills_raw).split(",") if s.strip()]
+                if skills_list:
+                    skills_data = skills_list  # Plain list; Prisma serializes to JSON
+
+            # Base data without optional fields
+            data = {
+                "title": title,
+                "description": str(row.get("description", "")),
+                "type": str(row.get("type", "FULL_TIME")),
+                "status": "OPEN",
+                # Required relation: Use 'connect' instead of direct FK
+                "recruiter": {
+                    "connect": {
+                        "id": recruiter_id  # Assumes recruiter_id is a valid User ID
+                    }
+                },
+            }
+
+            # Add optional scalars only if set
+            location = row.get("location")
+            if location:
+                data["location"] = str(location)
+
+            salary = row.get("salary")
+            if salary:
+                data["salary"] = int(salary)
+
+            # Add skills only if present (omit for null)
+            if skills_data is not None:
+                data["skills"] = skills_data
+
+            job = await db.job.create(data=data)
             inserted_jobs.append(job)
-         
+
         except Exception as e:
             raise ValueError(f"Failed to insert row {idx+1}: {e}")
-    
 
     await db.disconnect()
     return inserted_jobs

@@ -1,3 +1,4 @@
+# main.py - Complete corrected main file
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from routes.assessment import router as assessment_router
@@ -15,6 +16,13 @@ from routes.hr_routes.chat_route import router as hr_chat_router
 from routes.hr_routes.intervation_routes import router as analysis_router
 from routes.hr_routes.department_summary_route import router as department_router
 from routes.employee_route.recommendation_course import router as recommendation_course_router
+
+# Import applications router
+from routes.hr_routes.applications import router as applications_router
+
+# New job creation router
+from routes.hr_routes.job_creation import router as job_creation_router
+
 # Import the Socket.IO instance from socket_manager
 from utils.socket_manager import sio
 import socketio
@@ -53,6 +61,8 @@ app.include_router(hr_chat_router)
 app.include_router(analysis_router)
 app.include_router(department_router)
 app.include_router(recommendation_course_router)
+app.include_router(applications_router, prefix="/api")  # Applications under /applications
+app.include_router(job_creation_router, prefix="/api")  # New job creation routes under /jobs
 
 # Create ASGI app with both FastAPI and Socket.IO
 socket_app = socketio.ASGIApp(sio, app)
