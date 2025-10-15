@@ -38,50 +38,78 @@ class DescriptionGenerateRequest(BaseModel):
     salary: Optional[int] = None
     type: str = "FULL_TIME"
     skills: Optional[str] = None  # Comma-separated string
+    company_name: Optional[str] = None
+    company_about: Optional[str] = None
 
-# Prompt template for AI job description generation
+# Updated Prompt template for AI job description generation - professional template with balanced structure
 description_prompt = PromptTemplate(
-    input_variables=["title", "location", "salary", "type", "skills"],
+    input_variables=["title", "location", "salary", "type", "skills", "company_name", "company_about"],
     template="""
-You are an expert job description writer. Generate a professional, engaging job description for the following role.
+You are an expert HR professional and job description writer with years of experience crafting compelling, inclusive job postings for top tech companies. Your goal is to create a highly professional, detailed, and engaging job description that attracts top talent in a flowing, narrative style with selective use of bullet points for clarity.
 
 Job Details:
 - Title: {title}
 - Location: {location}
 - Salary: {salary}
-- Type: {type}
-- Skills: {skills}
+- Employment Type: {type}
+- Key Skills: {skills}
+- Company: {company_name}
+- About Company: {company_about}
 
-Write a concise description (150-250 words) that includes:
-- Role overview and responsibilities
-- Required qualifications and skills
-- Company culture/benefits (assume a modern tech company)
-- Call to action
+Generate an extensive job description (400-600 words) using a professional template structured as follows:
 
-Make it inclusive and appealing to diverse candidates.
+**Job Summary**  
+Begin with a compelling paragraph (100-150 words) that provides an engaging overview of the role, the company's mission as described in the about section, and the crucial impact the candidate can make. Highlight inclusivity and appeal to diverse backgrounds.
+
+**About the Role**  
+Write a concise paragraph (50-75 words) describing the overall role and its place within the team and company.
+
+**Key Responsibilities**  
+Use a bulleted list (6-8 items) for core duties. Employ action-oriented language (e.g., "Collaborate with cross-functional teams to..."). Keep bullets specific yet adaptable.
+
+**Qualifications**  
+Start with a paragraph (50-75 words) outlining essential requirements, including education, experience, and the provided key skills. Encourage equivalents. Follow with a short bulleted list (4-6 items) for preferred qualifications to broaden appeal.
+
+**What We Offer**  
+Conclude the main sections with a narrative paragraph (75-100 words) describing our comprehensive benefits package, including competitive salary, health coverage, professional growth opportunities, work-life balance (remote/hybrid options, flexible hours), collaborative and innovative culture, and unique perks like equity and wellness initiatives.
+
+**Our Commitment to Diversity, Equity, and Inclusion**  
+Add a dedicated paragraph (50-75 words) reaffirming our dedication to fostering a diverse, equitable workplace and equal opportunity for all.
+
+**How to Apply**  
+End with an enthusiastic call-to-action paragraph (30-50 words) inviting candidates to submit their applications via our careers portal.
+
+Use markdown formatting for headers (e.g., **bold** for subheaders) and ensure the language is professional, bias-free, ATS-optimized with keywords, and appealing to a global audience. Maintain a cohesive, readable flow.
 """
 )
 
 @router.post("/jobs/generate-description")
 async def generate_description(request: DescriptionGenerateRequest):
-    # Format skills as comma-separated string if provided
-    skills_str = request.skills if request.skills else ""
-    
-    # Create chain
-    chain = description_prompt | llm
-    
-    # Invoke the chain
-    response = chain.invoke({
-        "title": request.title,
-        "location": request.location or "",
-        "salary": f"${request.salary:,}" if request.salary else "Competitive",
-        "type": request.type,
-        "skills": skills_str
-    })
-    
-    return {
-        "description": response.content
-    }
+    try:
+        # Format skills as comma-separated string if provided
+        skills_str = request.skills if request.skills else "Relevant technical and soft skills based on the role"
+        
+        # Create chain
+        chain = description_prompt | llm
+        
+        # Invoke the chain asynchronously
+        response = await chain.ainvoke({
+            "title": request.title,
+            "location": request.location or "Remote/Hybrid (flexible)",
+            "salary": f"${request.salary:,}" if request.salary else "Competitive, based on experience",
+            "type": request.type,
+            "skills": skills_str,
+            "company_name": request.company_name or "Innovative Tech Company",
+            "company_about": request.company_about or "An innovative tech leader focused on AI and sustainability."
+        })
+        
+        return {
+            "description": response.content
+        }
+
+    except Exception as e:
+        print(f"AI Error generating description: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate description")
 
 @router.post("/jobs/create")
 async def create_job(request: JobCreateRequest):
@@ -186,25 +214,3 @@ async def create_job(request: JobCreateRequest):
         raise HTTPException(status_code=500, detail="Internal server error")
     finally:
         await prisma_client.disconnect()
-@router.post("/jobs/generate-description")
-async def generate_description(request: DescriptionGenerateRequest):
-    try:
-        # Generate AI description using LangChain
-        chain = description_prompt | llm
-        response = await chain.ainvoke({
-            "title": request.title,
-            "location": request.location or "Not specified",
-            "salary": request.salary or "Competitive",
-            "type": request.type,
-            "skills": request.skills or "Relevant skills"
-        })
-
-        description = response.content
-
-        return {
-            "description": description
-        }
-
-    except Exception as e:
-        print(f"AI Error generating description: {e}")
-        raise HTTPException(status_code=500, detail="Failed to generate description")

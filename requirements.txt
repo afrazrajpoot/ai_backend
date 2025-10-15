@@ -19,3 +19,4 @@ bcrypt
 langgraph
 pyexcel-ods3
 scikit-learn
+tavily-python
