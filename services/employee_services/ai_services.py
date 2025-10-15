@@ -15,8 +15,8 @@ from langchain.chains import LLMChain
 
 logger = logging.getLogger(__name__)
 
-# Ensure INDEX_DIR is relative to project root
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+# Ensure INDEX_DIR is in project root directory
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INDEX_DIR = os.getenv("JOBS_FAISS_DIR", os.path.join(PROJECT_ROOT, "faiss_jobs_index"))
 
 TOP_K = int(os.getenv("JOBS_RETRIEVE_TOP_K", "25"))
@@ -142,7 +142,7 @@ class JobVectorStore:
         if not self.vs:
             return []
         
-        # Search with scores
+        # Search with scores for top k relevant
         results = self.vs.similarity_search_with_score(query_text, k=k)
         
         # Filter by recruiter and format
@@ -196,37 +196,70 @@ Respond ONLY with the JSON object.
         
         # Text features
         bio = employee_info.get('bio', '')
-        skills = ' '.join([str(skill).lower() for skill in employee_info.get('skills', [])])
+        # Robust extraction for skills: handle both dicts and strings
+        skills_list = employee_info.get('skills', [])
+        skills_names = []
+        for skill in skills_list:
+            if isinstance(skill, dict):
+                skills_names.append(skill.get('name', str(skill)))
+            else:
+                skills_names.append(str(skill))
+        skills = ' '.join([s.lower() for s in skills_names])
         
-        # Handle arrays for education and experience
+        # Handle arrays for education (robust)
         education_list = employee_info.get('education', [])
-        education = ' '.join([str(edu).lower() for edu in education_list if edu])
+        education_names = []
+        for edu in education_list:
+            if isinstance(edu, dict):
+                education_names.append(edu.get('name', str(edu)))
+            else:
+                education_names.append(str(edu))
+        education = ' '.join([e.lower() for e in education_names if e])
         
+        # Handle arrays for experience (robust)
         experience_list = employee_info.get('experience', [])
-        experience = ' '.join([str(exp).lower() for exp in experience_list if exp])
+        experience_names = []
+        for exp in experience_list:
+            if isinstance(exp, dict):
+                experience_names.append(exp.get('name', str(exp)))
+            else:
+                experience_names.append(str(exp))
+        experience = ' '.join([e.lower() for e in experience_names if e])
         
         features['text_data'] = f"{bio} {skills} {education} {experience}"
         features['text_data'] = re.sub(r'[^\w\s]', '', features['text_data'])
         features['text_data'] = re.sub(r'\s+', ' ', features['text_data']).strip().lower()
         
-        # Handle array fields - convert to strings
+        # Handle array fields - convert to strings (robust)
         department_list = employee_info.get('department', [])
-        features['department'] = ' '.join([str(dept).lower() for dept in department_list if dept])
+        department_names = []
+        for dept in department_list:
+            if isinstance(dept, dict):
+                department_names.append(dept.get('name', str(dept)))
+            else:
+                department_names.append(str(dept))
+        features['department'] = ' '.join([d.lower() for d in department_names])
         
         position_list = employee_info.get('position', [])
-        features['position'] = ' '.join([str(pos).lower() for pos in position_list if pos])
+        position_names = []
+        for pos in position_list:
+            if isinstance(pos, dict):
+                position_names.append(pos.get('name', str(pos)))
+            else:
+                position_names.append(str(pos))
+        features['position'] = ' '.join([p.lower() for p in position_names])
         
-        features['skills_list'] = [str(skill).lower() for skill in employee_info.get('skills', [])]
+        features['skills_list'] = [s.lower() for s in skills_names]
         
-        # Create a formatted employee profile for LLM
+        # Create a formatted employee profile for LLM (use extracted names)
         features['employee_profile'] = (
             f"Name: {employee_info.get('firstName', '')} {employee_info.get('lastName', '')}\n"
             f"Bio: {employee_info.get('bio', '')}\n"
-            f"Skills: {', '.join(employee_info.get('skills', []))}\n"
-            f"Education: {', '.join(employee_info.get('education', []))}\n"
-            f"Experience: {', '.join(employee_info.get('experience', []))}\n"
-            f"Position: {', '.join(employee_info.get('position', []))}\n"
-            f"Department: {', '.join(employee_info.get('department', []))}\n"
+            f"Skills: {', '.join(skills_names)}\n"
+            f"Education: {', '.join(education_names)}\n"
+            f"Experience: {', '.join(experience_names)}\n"
+            f"Position: {', '.join(position_names)}\n"
+            f"Department: {', '.join(department_names)}\n"
             f"Salary Expectation: {employee_info.get('salary', 'Not specified')}"
         )
         
@@ -237,7 +270,6 @@ Respond ONLY with the JSON object.
         ).strip()
         
         return features
-    
     def _calculate_similarity(self, employee_features: Dict[str, Any], job_docs: List[Document], emb_score_dict: Dict[str, float]) -> List[Dict[str, Any]]:
         """Calculate similarity scores using batch LLM"""
         if not job_docs:
@@ -311,9 +343,9 @@ Respond ONLY with the JSON object.
             # Extract features
             employee_features = self._extract_features(employee_info)
             
-            # Retrieve jobs using the optimized query for FAISS
+            # Retrieve top relevant jobs using the optimized query for FAISS
             query_text = employee_features['optimized_query']
-            embedding_scored = self.vstore.retrieve_jobs_with_scores(query_text, recruiter_id, k=TOP_K)
+            embedding_scored = self.vstore.retrieve_jobs_with_scores(query_text, recruiter_id, k=50)
             
             if not embedding_scored:
                 return []
@@ -379,9 +411,9 @@ Respond ONLY with the JSON object.
                         }
                     })
             
-            # Sort by score and return top results
+            # Sort by score and return all relevant results
             final_jobs_with_scores.sort(key=lambda x: x["match_score"], reverse=True)
-            return final_jobs_with_scores[:TOP_K]
+            return final_jobs_with_scores
             
         except Exception as e:
             logger.error(f"Error in job recommendation: {e}")
