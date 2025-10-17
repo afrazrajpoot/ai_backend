@@ -163,17 +163,23 @@ async def create_job(request: JobCreateRequest):
             )
             print(f"DEBUG: Loaded existing vector store with {len(vectorstore.docstore._dict)} documents.")
             vectorstore.add_documents([doc])
-            print(f"DEBUG: Added new job '{request.title}' (ID: {job.id}). Now has {len(vectorstore.docstore._dict)} documents.")
+            print(f"DEBUG: Added new job '{job.title}' (ID: {job.id}). Now has {len(vectorstore.docstore._dict)} documents.")
         else:
             vectorstore = FAISS.from_documents([doc], embeddings)
-            print(f"DEBUG: Created new vector store with job '{request.title}' (ID: {job.id}). Has 1 document.")
+            print(f"DEBUG: Created new vector store with job '{job.title}' (ID: {job.id}). Has 1 document.")
         
         vectorstore.save_local(index_path)
         print(f"DEBUG: Vector store saved to {index_path}.")
 
-    except Exception as e:
-        print(f"❌ Error creating job: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return {
+            "message": "Job created successfully",
+            "job": job
+        }
 
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error creating job: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
     finally:
-        await prisma_client.disconnect()  
+        await prisma_client.disconnect()
