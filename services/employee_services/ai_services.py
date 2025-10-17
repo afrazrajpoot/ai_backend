@@ -131,23 +131,34 @@ class JobVectorStore:
             print("---")
 
     async def build_or_load(self, db: Prisma) -> None:
+        logger.info(f"=== FAISS build_or_load started ===")
+        logger.info(f"Current state - _loaded: {self._loaded}, vs exists: {self.vs is not None}")
+        
+        # Check if already loaded and index exists
         if self._loaded and self.vs:
-            logger.info("Force rebuilding FAISS index from database to get latest jobs.")
+            logger.info("FAISS index already loaded in memory, force rebuilding to get latest jobs.")
             self._loaded = False
             self.vs = None
 
-        # Ensure directory exists - this will be called at module load time,
-        # but double-check before building
+        # Ensure directory exists
         try:
             Path(INDEX_DIR).mkdir(parents=True, exist_ok=True)
-            logger.info(f"FAISS index directory verified: {INDEX_DIR}")
+            logger.info(f"✓ FAISS index directory verified: {INDEX_DIR}")
+            
+            # List contents if directory exists
+            contents = os.listdir(INDEX_DIR)
+            logger.info(f"✓ Directory contents: {contents}")
         except Exception as e:
-            logger.error(f"Failed to ensure FAISS directory exists: {e}")
+            logger.error(f"✗ Failed to ensure FAISS directory exists: {e}")
             raise
 
-        logger.info("Building FAISS index from database...")
+        logger.info("📥 Fetching jobs from database...")
         jobs = await db.job.find_many()
-        logger.info(f"Found {len(jobs)} jobs for indexing.")
+        logger.info(f"✓ Found {len(jobs)} total jobs in database")
+        
+        if jobs:
+            logger.info(f"Sample jobs: {[{'id': j.id, 'title': j.title, 'recruiterId': j.recruiterId} for j in jobs[:3]]}")
+        
         docs: List[Document] = [self._job_to_document(JobRow(
             id=j.id,
             title=j.title,
@@ -157,27 +168,42 @@ class JobVectorStore:
             type=getattr(j, "type", None)
         )) for j in jobs]
 
+        logger.info(f"✓ Created {len(docs)} documents from jobs")
+
         if not docs:
-            logger.warning("No jobs found to index. Creating placeholder index.")
+            logger.warning("⚠️  No jobs found to index. Creating placeholder index.")
             self.vs = FAISS.from_texts(["NO_JOBS"], self.embeddings, metadatas=[{"placeholder": True}])
         else:
+            logger.info("🔨 Building FAISS index from documents...")
             self.vs = FAISS.from_documents(docs, self.embeddings)
-            logger.info(f"Indexed {len(docs)} job documents.")
-            print("DEBUG: Jobs indexed from database:")
-            self.debug_jobs()
+            logger.info(f"✓ Successfully indexed {len(docs)} job documents")
+            
+            # Debug output
+            logger.info(f"✓ Vector store docstore size: {len(self.vs.docstore._dict)}")
+            for i, (doc_id, doc) in enumerate(list(self.vs.docstore._dict.items())[:5]):
+                logger.info(f"  Sample doc {i}: ID={doc_id}, title={doc.metadata.get('title')}, recruiter={doc.metadata.get('recruiterId')}")
 
         # Save the index with proper error handling
+        logger.info(f"💾 Attempting to save FAISS index to {INDEX_DIR}...")
         try:
             self.vs.save_local(INDEX_DIR)
-            logger.info(f"FAISS index saved successfully to {INDEX_DIR}.")
+            logger.info(f"✓ FAISS index saved successfully to {INDEX_DIR}")
+            
+            # Verify saved files
+            saved_contents = os.listdir(INDEX_DIR)
+            logger.info(f"✓ Saved files in directory: {saved_contents}")
         except PermissionError as e:
-            logger.error(f"Permission denied saving FAISS index to {INDEX_DIR}: {e}")
-            logger.warning("Index exists in memory but could not be persisted. This may cause issues on restart.")
+            logger.error(f"✗ Permission denied saving FAISS index to {INDEX_DIR}: {e}")
+            logger.error(f"  Please run: sudo chown -R $(whoami) {INDEX_DIR}")
+            logger.warning("  Index exists in memory but could not be persisted.")
         except Exception as e:
-            logger.error(f"Failed to save FAISS index: {e}")
-            logger.warning("Index exists in memory but could not be persisted. This may cause issues on restart.")
+            logger.error(f"✗ Failed to save FAISS index: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            logger.warning("  Index exists in memory but could not be persisted.")
         
         self._loaded = True
+        logger.info(f"=== FAISS build_or_load completed, _loaded={self._loaded} ===")
     
     def retrieve_jobs(self, query_text: str, recruiter_id: str, k: int = TOP_K) -> List[Document]:
         if not self.vs:
@@ -347,22 +373,28 @@ Respond ONLY with the JSON object.
         return enhanced_scores
 
     async def recommend_jobs_for_employee(self, user_id: str, recruiter_id: str) -> List[Dict[str, Any]]:
+        logger.info(f"=== Recommendation started for user_id={user_id}, recruiter_id={recruiter_id} ===")
+        
         db = Prisma()
         await db.connect()
         
         try:
+            logger.info("📊 Building/loading FAISS vector store...")
             await self.vstore.build_or_load(db)
+            logger.info(f"✓ FAISS store loaded, _loaded={self.vstore._loaded}")
             
-            print("DEBUG: All jobs in vector store before recommendation:")
-            self.vstore.debug_jobs()
-            
+            # Fetch user data
+            logger.info(f"👤 Fetching user data for user_id={user_id}...")
             user = await db.user.find_unique(
                 where={"id": user_id},
                 include={"employee": True}
             )
             
             if not user:
+                logger.error(f"✗ User not found: {user_id}")
                 raise ValueError("User not found")
+            
+            logger.info(f"✓ User found: {user.firstName} {user.lastName}")
 
             employee_info = {
                 "firstName": user.firstName or "",
@@ -376,14 +408,25 @@ Respond ONLY with the JSON object.
                 "salary": user.salary or ""
             }
 
+            logger.info(f"✓ Employee info extracted: skills={len(employee_info['skills'])}, education={len(employee_info['education'])}")
+
             employee_features = self._extract_features(employee_info)
+            logger.info(f"✓ Features extracted. Optimized query: {employee_features['optimized_query'][:100]}...")
             
             query_text = employee_features['optimized_query']
+            logger.info(f"🔍 Retrieving jobs with FAISS for recruiter_id={recruiter_id}...")
             embedding_scored = self.vstore.retrieve_jobs_with_scores(query_text, recruiter_id, k=50)
+            logger.info(f"✓ Retrieved {len(embedding_scored)} jobs with embedding scores")
+            
+            if embedding_scored:
+                logger.info(f"  Top 3 matches: {[(j['title'], j['match_score']) for j in embedding_scored[:3]]}")
             
             if not embedding_scored:
+                logger.warning(f"⚠️  No jobs retrieved for recruiter_id={recruiter_id}")
+                logger.info(f"  Total jobs in store: {len(self.vstore.vs.docstore._dict) if self.vstore.vs else 0}")
                 return []
             
+            # Deduplicate
             title_groups = defaultdict(list)
             for item in embedding_scored:
                 title_groups[item['title']].append(item)
@@ -395,12 +438,17 @@ Respond ONLY with the JSON object.
                 unique_items.append(best_item)
                 emb_score_dict[title] = best_item['match_score']
             
+            logger.info(f"✓ Deduplicated to {len(unique_items)} unique jobs")
+            
             unique_docs = [item['document'] for item in unique_items]
             
+            # Calculate similarity
+            logger.info("🤖 Calculating LLM similarity scores...")
             try:
                 recommended_jobs = self._calculate_similarity(employee_features, unique_docs, emb_score_dict)
+                logger.info(f"✓ LLM scoring completed for {len(recommended_jobs)} jobs")
             except Exception as e:
-                logger.warning(f"LLM similarity failed: {e}")
+                logger.warning(f"⚠️  LLM similarity failed: {e}")
                 recommended_jobs = [
                     {
                         'id': item['document'].metadata['id'],
@@ -410,9 +458,14 @@ Respond ONLY with the JSON object.
                     }
                     for item in unique_items
                 ]
+                logger.info(f"  Fallback to embedding scores for {len(recommended_jobs)} jobs")
             
+            # Fetch final job details
             ids = [j['id'] for j in recommended_jobs]
+            logger.info(f"📋 Fetching job details for {len(ids)} jobs...")
+            
             if not ids:
+                logger.warning("⚠️  No job IDs to fetch")
                 return []
                 
             final_jobs = await db.job.find_many(
@@ -420,6 +473,9 @@ Respond ONLY with the JSON object.
                 include={"recruiter": True}
             )
             
+            logger.info(f"✓ Fetched details for {len(final_jobs)} jobs")
+            
+            # Merge with scores
             final_jobs_with_scores = []
             for job in final_jobs:
                 score_data = next((r for r in recommended_jobs if r['id'] == job.id), None)
@@ -441,10 +497,15 @@ Respond ONLY with the JSON object.
                     })
             
             final_jobs_with_scores.sort(key=lambda x: x["match_score"], reverse=True)
+            logger.info(f"✓ Final recommendations: {len(final_jobs_with_scores)} jobs")
+            if final_jobs_with_scores:
+                logger.info(f"  Top 3: {[(j['title'], j['match_score']) for j in final_jobs_with_scores[:3]]}")
+            
+            logger.info(f"=== Recommendation completed successfully ===")
             return final_jobs_with_scores
             
         except Exception as e:
-            logger.error(f"Error in job recommendation: {e}")
+            logger.error(f"✗ Error in job recommendation: {e}")
             import traceback
             logger.error(traceback.format_exc())
             return []
