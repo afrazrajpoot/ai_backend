@@ -15,14 +15,55 @@ from langchain.chains import LLMChain
 
 logger = logging.getLogger(__name__)
 
-# Ensure INDEX_DIR is in project root directory - standardized to "faiss_index" to match existing
+# Enhanced directory resolution with production fallbacks
 EMPLOYEE_SERVICES_DIR = os.path.dirname(os.path.abspath(__file__))
 SERVICES_DIR = os.path.dirname(EMPLOYEE_SERVICES_DIR)
 PROJECT_ROOT = os.path.dirname(SERVICES_DIR)
-INDEX_DIR = os.getenv("JOBS_FAISS_DIR", os.path.join(PROJECT_ROOT, "faiss_index"))  # Changed default to "faiss_index"
 
+def get_index_dir() -> str:
+    """Get appropriate index directory with robust fallbacks for production"""
+    # First, try environment variable
+    env_dir = os.getenv("JOBS_FAISS_DIR")
+    if env_dir:
+        return env_dir
+    
+    # Check if we're in production environment
+    is_production = os.getenv("ENVIRONMENT") == "production" or os.getenv("NODE_ENV") == "production"
+    
+    if is_production:
+        # Production-specific directory options with fallbacks
+        production_paths = [
+            os.path.join(PROJECT_ROOT, "faiss_index"),  # Project directory
+            "/tmp/faiss_index",  # System temp (usually writable)
+            "/var/tmp/faiss_index",  # Persistent temp
+            os.path.expanduser("~/faiss_index"),  # User home directory
+        ]
+        
+        for path in production_paths:
+            try:
+                os.makedirs(path, exist_ok=True, mode=0o755)
+                # Test write permission
+                test_file = os.path.join(path, ".write_test")
+                with open(test_file, 'w') as f:
+                    f.write("test")
+                os.remove(test_file)
+                print(f"DEBUG: Using production directory: {path}")
+                return path
+            except Exception as e:
+                print(f"DEBUG: Directory {path} not usable: {e}")
+                continue
+        
+        # Last resort: current working directory
+        cwd_path = os.path.join(os.getcwd(), "faiss_index")
+        os.makedirs(cwd_path, exist_ok=True, mode=0o755)
+        print(f"DEBUG: Using current directory as fallback: {cwd_path}")
+        return cwd_path
+    
+    # Development: use project root
+    return os.path.join(PROJECT_ROOT, "faiss_index")
+
+INDEX_DIR = get_index_dir()
 TOP_K = int(os.getenv("JOBS_RETRIEVE_TOP_K", "25"))
-
 
 @dataclass
 class JobRow:
@@ -82,38 +123,82 @@ class JobVectorStore:
             print(f"Content preview: {doc.page_content[:200]}...")
             print("---")
 
+    def _ensure_directory_access(self) -> bool:
+        """Ensure directory exists and is accessible with detailed debugging"""
+        print(f"DEBUG: Ensuring FAISS index directory: {INDEX_DIR}")
+        print(f"DEBUG: Current working directory: {os.getcwd()}")
+        print(f"DEBUG: User: {os.getenv('USER', 'unknown')}")
+        
+        try:
+            # Create directory if it doesn't exist
+            if not os.path.exists(INDEX_DIR):
+                print(f"DEBUG: Creating directory: {INDEX_DIR}")
+                os.makedirs(INDEX_DIR, mode=0o755, exist_ok=True)
+            
+            # Verify directory exists and is accessible
+            if not os.path.exists(INDEX_DIR):
+                raise OSError(f"Failed to create directory: {INDEX_DIR}")
+            
+            if not os.path.isdir(INDEX_DIR):
+                raise OSError(f"Path exists but is not a directory: {INDEX_DIR}")
+            
+            # Check permissions
+            if not os.access(INDEX_DIR, os.W_OK):
+                raise OSError(f"Directory not writable: {INDEX_DIR}")
+            if not os.access(INDEX_DIR, os.X_OK):
+                raise OSError(f"Directory not executable: {INDEX_DIR}")
+            
+            # Test write capability
+            test_file = os.path.join(INDEX_DIR, ".perm_test")
+            try:
+                with open(test_file, 'w') as f:
+                    f.write("test")
+                os.remove(test_file)
+            except Exception as e:
+                raise OSError(f"Cannot write to directory: {e}")
+            
+            print(f"DEBUG: Directory validated successfully: {INDEX_DIR}")
+            print(f"DEBUG: Directory permissions: {oct(os.stat(INDEX_DIR).st_mode)[-3:]}")
+            return True
+            
+        except Exception as e:
+            print(f"ERROR: Directory validation failed: {e}")
+            logger.error(f"Directory validation failed: {e}")
+            return False
+
     async def build_or_load(self, db: Prisma) -> None:
-        print(f"DEBUG: INDEX_DIR resolved to: {INDEX_DIR}")  # Added print for path
+        print(f"DEBUG: INDEX_DIR resolved to: {INDEX_DIR}")
         print(f"DEBUG: PROJECT_ROOT: {PROJECT_ROOT}")
         
-        # Optional: Load from disk if exists and not forcing rebuild (uncomment for prod caching)
-        # index_file = os.path.join(INDEX_DIR, "index.faiss")
-        # if os.path.exists(index_file) and self.vs is None:
-        #     try:
-        #         self.vs = FAISS.load_local(INDEX_DIR, self.embeddings, allow_dangerous_deserialization=True)
-        #         self._loaded = True
-        #         logger.info(f"FAISS index loaded from {INDEX_DIR}.")
-        #         return
-        #     except Exception as load_e:
-        #         logger.warning(f"Failed to load existing FAISS index: {load_e}. Rebuilding...")
+        # First, ensure directory access
+        if not self._ensure_directory_access():
+            # Try fallback to /tmp if primary directory fails
+            global INDEX_DIR
+            original_dir = INDEX_DIR
+            INDEX_DIR = "/tmp/faiss_index"
+            print(f"DEBUG: Trying fallback directory: {INDEX_DIR}")
+            
+            if not self._ensure_directory_access():
+                raise OSError(f"Failed to access both {original_dir} and fallback {INDEX_DIR}")
+        
+        # Optional: Load from disk if exists and not forcing rebuild
+        index_file = os.path.join(INDEX_DIR, "index.faiss")
+        if os.path.exists(index_file) and self.vs is None:
+            try:
+                print(f"DEBUG: Loading existing FAISS index from: {index_file}")
+                self.vs = FAISS.load_local(INDEX_DIR, self.embeddings, allow_dangerous_deserialization=True)
+                self._loaded = True
+                logger.info(f"FAISS index loaded from {INDEX_DIR}.")
+                print("DEBUG: Successfully loaded existing FAISS index")
+                return
+            except Exception as load_e:
+                print(f"DEBUG: Failed to load existing FAISS index: {load_e}. Rebuilding...")
+                logger.warning(f"Failed to load existing FAISS index: {load_e}. Rebuilding...")
 
-        # Ensure directory exists and is writable (create first, then validate)
-        print(f"DEBUG: Ensuring FAISS index directory: {INDEX_DIR}")
-        try:
-            os.makedirs(INDEX_DIR, exist_ok=True)
-            print(f"DEBUG: Directory exists after makedirs: {os.path.exists(INDEX_DIR)}")
-            if not os.access(INDEX_DIR, os.W_OK | os.X_OK):
-                raise OSError(f"INDEX_DIR '{INDEX_DIR}' is not writable/executable after creation. Check perms.")
-            print(f"DEBUG: Directory is writable/executable.")
-            logger.info(f"FAISS index directory validated: {INDEX_DIR}")
-        except Exception as e:
-            print(f"ERROR: Failed to create/validate INDEX_DIR '{INDEX_DIR}': {e}")
-            logger.error(f"Failed to create/validate INDEX_DIR '{INDEX_DIR}': {e}")
-            raise OSError(f"Cannot create/access INDEX_DIR '{INDEX_DIR}': {e}")
-
-        # Optional: Skip force-rebuild in prod (set via env or flag) - force true for debugging
-        FORCE_REBUILD = os.getenv("FORCE_FAISS_REBUILD", "true").lower() == "true"  # Set default to true for testing
+        # Check if we should force rebuild
+        FORCE_REBUILD = os.getenv("FORCE_FAISS_REBUILD", "false").lower() == "true"
         print(f"DEBUG: FORCE_REBUILD: {FORCE_REBUILD}, _loaded: {self._loaded}, vs exists: {self.vs is not None}")
+        
         if self._loaded and self.vs and not FORCE_REBUILD:
             print("DEBUG: Using existing in-memory FAISS index.")
             logger.info("Using existing in-memory FAISS index.")
@@ -121,10 +206,12 @@ class JobVectorStore:
 
         print("DEBUG: Building/rebuilding FAISS index from database...")
         logger.info("Building/rebuilding FAISS index from database...")
+        
         try:
             jobs = await db.job.find_many()
             print(f"DEBUG: Found {len(jobs)} jobs for indexing.")
             logger.info(f"Found {len(jobs)} jobs for indexing.")
+            
             docs: List[Document] = [self._job_to_document(JobRow(
                 id=j.id,
                 title=j.title,
@@ -142,15 +229,30 @@ class JobVectorStore:
                 self.vs = FAISS.from_documents(docs, self.embeddings)
                 print(f"DEBUG: Indexed {len(docs)} job documents.")
                 logger.info(f"Indexed {len(docs)} job documents.")
-                # Debug: print jobs after building (keep for now, remove in full prod)
+                # Debug: print jobs after building
                 print("DEBUG: Jobs indexed from database:")
                 self.debug_jobs()
 
             # Save the index
             print(f"DEBUG: Saving index to {INDEX_DIR}")
-            self.vs.save_local(INDEX_DIR)
-            print(f"DEBUG: FAISS index saved successfully to {INDEX_DIR}.")
-            logger.info(f"FAISS index saved successfully to {INDEX_DIR}.")
+            try:
+                self.vs.save_local(INDEX_DIR)
+                print(f"DEBUG: FAISS index saved successfully to {INDEX_DIR}.")
+                logger.info(f"FAISS index saved successfully to {INDEX_DIR}.")
+                
+                # Verify the files were created
+                expected_files = ["index.faiss", "index.pkl"]
+                for file in expected_files:
+                    file_path = os.path.join(INDEX_DIR, file)
+                    if os.path.exists(file_path):
+                        print(f"DEBUG: Created file: {file_path} (size: {os.path.getsize(file_path)} bytes)")
+                    else:
+                        print(f"WARNING: Expected file not found: {file_path}")
+                        
+            except Exception as save_error:
+                print(f"ERROR: Failed to save FAISS index: {save_error}")
+                logger.error(f"Failed to save FAISS index: {save_error}")
+                # Don't re-raise, keep the in-memory index
        
         except Exception as e:
             print(f"ERROR: Failed to build FAISS index: {e}")
