@@ -117,10 +117,19 @@ async def create_job(request: JobCreateRequest):
     try:
         await prisma_client.connect()
 
-        # Prepare skills as JSON if provided
+        # 🔹 Step 1: Normalize existing skills data (fix old inconsistent records)
+        jobs = await prisma_client.job.find_many()
+        for j in jobs:
+            if isinstance(j.skills, list):
+                await prisma_client.job.update(
+                    where={"id": j.id},
+                    data={"skills": json.dumps(j.skills)}
+                )
+
+        # 🔹 Step 2: Prepare skills JSON for the new job
         skills_json = json.dumps(request.skills) if request.skills else None
 
-        # Create the job
+        # 🔹 Step 3: Create the new job record
         job = await prisma_client.job.create(
             data={
                 "title": request.title,
@@ -134,11 +143,12 @@ async def create_job(request: JobCreateRequest):
             }
         )
 
-        # Add job to FAISS vector store in services folder
+        # 🔹 Step 4: Setup FAISS vectorstore directory
         project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         index_path = os.path.join(project_root, "services", "faiss_jobs_index")
         os.makedirs(index_path, exist_ok=True)
-        
+
+        # 🔹 Step 5: Create document for new job
         doc = Document(
             page_content=(
                 f"Title: {request.title}\n"
@@ -153,29 +163,44 @@ async def create_job(request: JobCreateRequest):
                 "recruiterId": request.recruiterId,
             }
         )
-        
-        if os.path.exists(os.path.join(index_path, "index.faiss")) and os.path.exists(os.path.join(index_path, "index.pkl")):
+
+        # 🔹 Step 6: Load or create FAISS vectorstore and add new job
+        faiss_index = os.path.join(index_path, "index.faiss")
+        faiss_meta = os.path.join(index_path, "index.pkl")
+
+        if os.path.exists(faiss_index) and os.path.exists(faiss_meta):
             vectorstore = FAISS.load_local(
-                index_path, 
-                embeddings, 
+                index_path,
+                embeddings,
                 allow_dangerous_deserialization=True
             )
             vectorstore.add_documents([doc])
         else:
             vectorstore = FAISS.from_documents([doc], embeddings)
-        
+
         vectorstore.save_local(index_path)
 
-        # For debugging: get first previous job and add it new in store
-        print("DEBUG: Fetching previous jobs...")
-        all_jobs = await prisma_client.job.find_many()
-        previous_jobs = [j for j in all_jobs if j.id != job.id]
-        print(f"DEBUG: Total jobs: {len(all_jobs)}, Previous jobs: {len(previous_jobs)}")
+        # 🔹 Step 7: (Optional) Add first previous job to FAISS for testing/debug
+        if os.getenv("DEBUG", "false").lower() == "true":
+            print("DEBUG: Fetching previous jobs...")
+        previous_jobs = [j for j in jobs if j.id != job.id]
+
+        if os.getenv("DEBUG", "false").lower() == "true":
+            print(f"DEBUG: Total jobs: {len(jobs)}, Previous jobs: {len(previous_jobs)}")
+
         if previous_jobs:
             first_previous_job = previous_jobs[0]
-            print(f"DEBUG: Adding previous job: {first_previous_job.title} (ID: {first_previous_job.id})")
-            # Parse skills if needed
-            previous_skills = json.loads(first_previous_job.skills) if first_previous_job.skills else []
+
+            if os.getenv("DEBUG", "false").lower() == "true":
+                print(f"DEBUG: Adding previous job: {first_previous_job.title} (ID: {first_previous_job.id})")
+
+            # Parse skills safely
+            previous_skills = (
+                json.loads(first_previous_job.skills)
+                if isinstance(first_previous_job.skills, str)
+                else (first_previous_job.skills or [])
+            )
+
             doc_previous = Document(
                 page_content=(
                     f"Title: {first_previous_job.title}\n"
@@ -190,18 +215,22 @@ async def create_job(request: JobCreateRequest):
                     "recruiterId": first_previous_job.recruiterId,
                 }
             )
-            # Load the vectorstore again and add the previous job doc
+
             vectorstore_previous = FAISS.load_local(
-                index_path, 
-                embeddings, 
+                index_path,
+                embeddings,
                 allow_dangerous_deserialization=True
             )
             vectorstore_previous.add_documents([doc_previous])
             vectorstore_previous.save_local(index_path)
-            print("DEBUG: Previous job added to vector store successfully.")
-        else:
-            print("DEBUG: No previous jobs found.")
 
+            if os.getenv("DEBUG", "false").lower() == "true":
+                print("DEBUG: Previous job added to vector store successfully.")
+        else:
+            if os.getenv("DEBUG", "false").lower() == "true":
+                print("DEBUG: No previous jobs found.")
+
+        # 🔹 Step 8: Return response
         return {
             "message": "Job created successfully",
             "job": job
