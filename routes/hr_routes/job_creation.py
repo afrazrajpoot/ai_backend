@@ -1,10 +1,10 @@
 # routes/hr_routes/job_creation.py - Complete job creation and description generation routes
 from fastapi import APIRouter, HTTPException, status, Body
-from prisma import Prisma
+from prisma import Prisma, Json
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain.prompts import PromptTemplate
 from langchain_community.vectorstores import FAISS
-from langchain.docstore.document import Document
+from langchain.schema import Document
 from pydantic import BaseModel
 from typing import Optional, List
 import os
@@ -117,19 +117,7 @@ async def create_job(request: JobCreateRequest):
     try:
         await prisma_client.connect()
 
-        # 🔹 Step 1: Normalize legacy jobs
-        old_jobs = await prisma_client.job.find_many()
-        for j in old_jobs:
-            if isinstance(j.skills, list):
-                await prisma_client.job.update(
-                    where={"id": j.id},
-                    data={"skills": json.dumps(j.skills)}
-                )
-
-        # 🔹 Step 2: Ensure `skills` is a JSON string
-        skills_json = json.dumps(request.skills) if isinstance(request.skills, list) else request.skills
-
-        # 🔹 Step 3: Create new job
+        # Create the job - use Json wrapper for skills and connect for recruiter relation
         job = await prisma_client.job.create(
             data={
                 "title": request.title,
@@ -137,15 +125,19 @@ async def create_job(request: JobCreateRequest):
                 "location": request.location,
                 "salary": request.salary,
                 "type": request.type,
-                "skills": skills_json,  # <-- always text
-                "recruiterId": request.recruiterId,
-                "status": "OPEN",
+                "skills": Json(request.skills) if request.skills else None,
+                "recruiter": {
+                    "connect": {
+                        "id": request.recruiterId
+                    }
+                },
+                "status": "OPEN",  # Default
             }
         )
 
-        # 🔹 Step 4: FAISS index handling
+        # Add job to FAISS vector store in project root
         project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        index_path = os.path.join(project_root, "services", "faiss_jobs_index")
+        index_path = os.path.join(project_root, "faiss_jobs_index")
         os.makedirs(index_path, exist_ok=True)
 
         doc = Document(
@@ -162,24 +154,26 @@ async def create_job(request: JobCreateRequest):
                 "recruiterId": job.recruiterId,
             }
         )
-
-        faiss_index = os.path.join(index_path, "index.faiss")
-        faiss_meta = os.path.join(index_path, "index.pkl")
-
-        if os.path.exists(faiss_index) and os.path.exists(faiss_meta):
-            vectorstore = FAISS.load_local(index_path, embeddings, allow_dangerous_deserialization=True)
+        
+        if os.path.exists(os.path.join(index_path, "index.faiss")) and os.path.exists(os.path.join(index_path, "index.pkl")):
+            vectorstore = FAISS.load_local(
+                index_path, 
+                embeddings, 
+                allow_dangerous_deserialization=True
+            )
+            print(f"DEBUG: Loaded existing vector store with {len(vectorstore.docstore._dict)} documents.")
             vectorstore.add_documents([doc])
+            print(f"DEBUG: Added new job '{request.title}' (ID: {job.id}). Now has {len(vectorstore.docstore._dict)} documents.")
         else:
             vectorstore = FAISS.from_documents([doc], embeddings)
-
+            print(f"DEBUG: Created new vector store with job '{request.title}' (ID: {job.id}). Has 1 document.")
+        
         vectorstore.save_local(index_path)
-
-        print("✅ Job created successfully.")
-        return {"message": "Job created successfully", "job": job}
+        print(f"DEBUG: Vector store saved to {index_path}.")
 
     except Exception as e:
         print(f"❌ Error creating job: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
     finally:
-        await prisma_client.disconnect()
+        await prisma_client.disconnect()  

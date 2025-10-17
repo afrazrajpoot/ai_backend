@@ -16,7 +16,9 @@ from langchain.chains import LLMChain
 logger = logging.getLogger(__name__)
 
 # Ensure INDEX_DIR is in project root directory
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+EMPLOYEE_SERVICES_DIR = os.path.dirname(os.path.abspath(__file__))
+SERVICES_DIR = os.path.dirname(EMPLOYEE_SERVICES_DIR)
+PROJECT_ROOT = os.path.dirname(SERVICES_DIR)
 INDEX_DIR = os.getenv("JOBS_FAISS_DIR", os.path.join(PROJECT_ROOT, "faiss_jobs_index"))
 
 TOP_K = int(os.getenv("JOBS_RETRIEVE_TOP_K", "25"))
@@ -66,41 +68,34 @@ class JobVectorStore:
             },
         )
 
+    def debug_jobs(self) -> None:
+        """Debug method to print all jobs in the vector store"""
+        if not self.vs:
+            print("No vector store loaded.")
+            return
+        
+        print(f"Total documents in store: {len(self.vs.docstore._dict)}")
+        for doc_id, doc in self.vs.docstore._dict.items():
+            print(f"Doc ID: {doc_id}")
+            print(f"Title: {doc.metadata.get('title', 'N/A')}")
+            print(f"Recruiter ID: {doc.metadata.get('recruiterId', 'N/A')}")
+            print(f"Content preview: {doc.page_content[:200]}...")
+            print("---")
+
     async def build_or_load(self, db: Prisma) -> None:
         if self._loaded and self.vs:
-            return  # Already built
+            # Force rebuild to get latest data
+            logger.info("Force rebuilding FAISS index from database to get latest jobs.")
+            self._loaded = False
+            self.vs = None
 
         # Ensure directory exists in project root
         os.makedirs(INDEX_DIR, exist_ok=True)
         logger.info(f"FAISS index directory ensured: {INDEX_DIR}")
 
-        # Try loading persisted index - check if index files actually exist
-        index_file = os.path.join(INDEX_DIR, "index.faiss")
-        pkl_file = os.path.join(INDEX_DIR, "index.pkl")
-        
-        if os.path.exists(index_file) and os.path.exists(pkl_file):
-            try:
-                self.vs = FAISS.load_local(INDEX_DIR, self.embeddings, allow_dangerous_deserialization=True)
-                logger.info("FAISS index loaded successfully.")
-                self._loaded = True
-                return
-            except Exception as e:
-                logger.warning(f"Failed to load FAISS index: {e}")
-                # Clean up corrupted files
-                try:
-                    if os.path.exists(index_file):
-                        os.remove(index_file)
-                    if os.path.exists(pkl_file):
-                        os.remove(pkl_file)
-                  
-                except Exception as cleanup_error:
-                    logger.warning(f"Failed to cleanup corrupted files: {cleanup_error}")
-
-
-        logger.info("Building FAISS index for the first time...")
+        logger.info("Building FAISS index from database...")
         jobs = await db.job.find_many()
         logger.info(f"Found {len(jobs)} jobs for indexing.")
-        # print(jobs,'jobs found for recommendation')
         docs: List[Document] = [self._job_to_document(JobRow(
             id=j.id,
             title=j.title,
@@ -116,6 +111,9 @@ class JobVectorStore:
         else:
             self.vs = FAISS.from_documents(docs, self.embeddings)
             logger.info(f"Indexed {len(docs)} job documents.")
+            # Debug: print jobs after building
+            print("DEBUG: Jobs indexed from database:")
+            self.debug_jobs()
     
 
         # Save the index
@@ -317,6 +315,10 @@ Respond ONLY with the JSON object.
         try:
             # Build/load FAISS store (this will create directory and save first time if needed)
             await self.vstore.build_or_load(db)
+            
+            # Debug: print all jobs in store before recommendation
+            print("DEBUG: All jobs in vector store before recommendation:")
+            self.vstore.debug_jobs()
             
             # Fetch user data with proper handling of array fields
             user = await db.user.find_unique(
