@@ -15,11 +15,11 @@ from langchain.chains import LLMChain
 
 logger = logging.getLogger(__name__)
 
-# Ensure INDEX_DIR is in project root directory
+# Ensure INDEX_DIR is in project root directory - standardized to "faiss_index" to match existing
 EMPLOYEE_SERVICES_DIR = os.path.dirname(os.path.abspath(__file__))
 SERVICES_DIR = os.path.dirname(EMPLOYEE_SERVICES_DIR)
 PROJECT_ROOT = os.path.dirname(SERVICES_DIR)
-INDEX_DIR = os.getenv("JOBS_FAISS_DIR", os.path.join(PROJECT_ROOT, "faiss_jobs_index"))
+INDEX_DIR = os.getenv("JOBS_FAISS_DIR", os.path.join(PROJECT_ROOT, "faiss_index"))  # Changed default to "faiss_index"
 
 TOP_K = int(os.getenv("JOBS_RETRIEVE_TOP_K", "25"))
 
@@ -83,6 +83,9 @@ class JobVectorStore:
             print("---")
 
     async def build_or_load(self, db: Prisma) -> None:
+        print(f"DEBUG: INDEX_DIR resolved to: {INDEX_DIR}")  # Added print for path
+        print(f"DEBUG: PROJECT_ROOT: {PROJECT_ROOT}")
+        
         # Optional: Load from disk if exists and not forcing rebuild (uncomment for prod caching)
         # index_file = os.path.join(INDEX_DIR, "index.faiss")
         # if os.path.exists(index_file) and self.vs is None:
@@ -95,25 +98,32 @@ class JobVectorStore:
         #         logger.warning(f"Failed to load existing FAISS index: {load_e}. Rebuilding...")
 
         # Ensure directory exists and is writable (create first, then validate)
-        logger.info(f"Ensuring FAISS index directory: {INDEX_DIR}")
+        print(f"DEBUG: Ensuring FAISS index directory: {INDEX_DIR}")
         try:
             os.makedirs(INDEX_DIR, exist_ok=True)
+            print(f"DEBUG: Directory exists after makedirs: {os.path.exists(INDEX_DIR)}")
             if not os.access(INDEX_DIR, os.W_OK | os.X_OK):
                 raise OSError(f"INDEX_DIR '{INDEX_DIR}' is not writable/executable after creation. Check perms.")
+            print(f"DEBUG: Directory is writable/executable.")
             logger.info(f"FAISS index directory validated: {INDEX_DIR}")
         except Exception as e:
+            print(f"ERROR: Failed to create/validate INDEX_DIR '{INDEX_DIR}': {e}")
             logger.error(f"Failed to create/validate INDEX_DIR '{INDEX_DIR}': {e}")
             raise OSError(f"Cannot create/access INDEX_DIR '{INDEX_DIR}': {e}")
 
-        # Optional: Skip force-rebuild in prod (set via env or flag)
-        FORCE_REBUILD = os.getenv("FORCE_FAISS_REBUILD", "false").lower() == "true"
+        # Optional: Skip force-rebuild in prod (set via env or flag) - force true for debugging
+        FORCE_REBUILD = os.getenv("FORCE_FAISS_REBUILD", "true").lower() == "true"  # Set default to true for testing
+        print(f"DEBUG: FORCE_REBUILD: {FORCE_REBUILD}, _loaded: {self._loaded}, vs exists: {self.vs is not None}")
         if self._loaded and self.vs and not FORCE_REBUILD:
+            print("DEBUG: Using existing in-memory FAISS index.")
             logger.info("Using existing in-memory FAISS index.")
             return
 
+        print("DEBUG: Building/rebuilding FAISS index from database...")
         logger.info("Building/rebuilding FAISS index from database...")
         try:
             jobs = await db.job.find_many()
+            print(f"DEBUG: Found {len(jobs)} jobs for indexing.")
             logger.info(f"Found {len(jobs)} jobs for indexing.")
             docs: List[Document] = [self._job_to_document(JobRow(
                 id=j.id,
@@ -125,36 +135,45 @@ class JobVectorStore:
             )) for j in jobs]
 
             if not docs:
+                print("DEBUG: No jobs found, creating placeholder index.")
                 logger.warning("No jobs found to index. Creating placeholder index.")
                 self.vs = FAISS.from_texts(["NO_JOBS"], self.embeddings, metadatas=[{"placeholder": True}])
             else:
                 self.vs = FAISS.from_documents(docs, self.embeddings)
+                print(f"DEBUG: Indexed {len(docs)} job documents.")
                 logger.info(f"Indexed {len(docs)} job documents.")
                 # Debug: print jobs after building (keep for now, remove in full prod)
                 print("DEBUG: Jobs indexed from database:")
                 self.debug_jobs()
 
             # Save the index
+            print(f"DEBUG: Saving index to {INDEX_DIR}")
             self.vs.save_local(INDEX_DIR)
+            print(f"DEBUG: FAISS index saved successfully to {INDEX_DIR}.")
             logger.info(f"FAISS index saved successfully to {INDEX_DIR}.")
        
         except Exception as e:
+            print(f"ERROR: Failed to build FAISS index: {e}")
             logger.error(f"Failed to build FAISS index: {e}")
             import traceback
             logger.error(traceback.format_exc())
             # Fallback: Create minimal in-memory index if possible
             try:
                 self.vs = FAISS.from_texts(["INDEX_BUILD_FAILED"], self.embeddings, metadatas=[{"error": str(e)}])
+                print("DEBUG: Fallback in-memory index created.")
                 logger.info("Fallback in-memory index created.")
             except Exception as fallback_e:
+                print(f"CRITICAL: Fallback index also failed: {fallback_e}")
                 logger.critical(f"Fallback index also failed: {fallback_e}")
                 self.vs = None
             raise  # Re-raise to alert in prod
         
         self._loaded = True
+        print(f"DEBUG: Build complete, _loaded set to True, vs: {self.vs is not None}")
     
     def retrieve_jobs(self, query_text: str, recruiter_id: str, k: int = TOP_K) -> List[Document]:
         if not self.vs:
+            print("DEBUG: No vector store for retrieve_jobs.")
             return []
         # Retrieve top-K relevant jobs from FAISS
         docs = self.vs.similarity_search(query_text, k=k)
@@ -164,6 +183,7 @@ class JobVectorStore:
     def retrieve_jobs_with_scores(self, query_text: str, recruiter_id: str, k: int = TOP_K) -> List[Dict[str, Any]]:
         """Retrieve jobs with similarity scores using FAISS embeddings"""
         if not self.vs:
+            print("DEBUG: No vector store for retrieve_jobs_with_scores.")
             return []
         
         # Search with scores for top k relevant
@@ -181,6 +201,7 @@ class JobVectorStore:
                     'document': doc
                 })
         
+        print(f"DEBUG: Retrieved {len(scored_jobs)} scored jobs for recruiter {recruiter_id}.")
         return scored_jobs
 
 
@@ -336,12 +357,15 @@ Respond ONLY with the JSON object.
         return enhanced_scores
 
     async def recommend_jobs_for_employee(self, user_id: str, recruiter_id: str) -> List[Dict[str, Any]]:
+        print(f"DEBUG: Starting recommend_jobs_for_employee for user {user_id}, recruiter {recruiter_id}")
         db = Prisma()
         await db.connect()
         
         try:
             # Build/load FAISS store (this will create directory and save first time if needed)
+            print("DEBUG: Calling build_or_load...")
             await self.vstore.build_or_load(db)
+            print(f"DEBUG: After build_or_load, _loaded: {self.vstore._loaded}, vs: {self.vstore.vs is not None}")
             
             # Debug: print all jobs in store before recommendation
             print("DEBUG: All jobs in vector store before recommendation:")
@@ -371,12 +395,14 @@ Respond ONLY with the JSON object.
 
             # Extract features
             employee_features = self._extract_features(employee_info)
+            print(f"DEBUG: Optimized query: {employee_features['optimized_query'][:200]}...")  # Truncated for log
             
             # Retrieve top relevant jobs using the optimized query for FAISS
             query_text = employee_features['optimized_query']
             embedding_scored = self.vstore.retrieve_jobs_with_scores(query_text, recruiter_id, k=50)
             
             if not embedding_scored:
+                print("DEBUG: No embedding_scored results.")
                 return []
             
             # Deduplicate by title: pick the best embedding score per title
@@ -392,6 +418,7 @@ Respond ONLY with the JSON object.
                 emb_score_dict[title] = best_item['match_score']
             
             unique_docs = [item['document'] for item in unique_items]
+            print(f"DEBUG: Unique items after dedup: {len(unique_items)}")
             
             # Calculate similarity scores using LLM (batched)
             try:
@@ -412,6 +439,7 @@ Respond ONLY with the JSON object.
             # Get final job details from database by ID
             ids = [j['id'] for j in recommended_jobs]
             if not ids:
+                print("DEBUG: No IDs for final fetch.")
                 return []
                 
             final_jobs = await db.job.find_many(
@@ -442,9 +470,11 @@ Respond ONLY with the JSON object.
             
             # Sort by score and return all relevant results
             final_jobs_with_scores.sort(key=lambda x: x["match_score"], reverse=True)
+            print(f"DEBUG: Returning {len(final_jobs_with_scores)} recommended jobs.")
             return final_jobs_with_scores
             
         except Exception as e:
+            print(f"ERROR: Error in job recommendation: {e}")
             logger.error(f"Error in job recommendation: {e}")
             import traceback
             logger.error(traceback.format_exc())
