@@ -5,6 +5,7 @@ from typing import List, Dict, Optional, Any
 from dataclasses import dataclass
 import re
 from collections import defaultdict
+from pathlib import Path
 
 from prisma import Prisma
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
@@ -15,55 +16,61 @@ from langchain.chains import LLMChain
 
 logger = logging.getLogger(__name__)
 
-# Enhanced directory resolution with production fallbacks
-EMPLOYEE_SERVICES_DIR = os.path.dirname(os.path.abspath(__file__))
-SERVICES_DIR = os.path.dirname(EMPLOYEE_SERVICES_DIR)
-PROJECT_ROOT = os.path.dirname(SERVICES_DIR)
-
-def get_index_dir() -> str:
-    """Get appropriate index directory with robust fallbacks for production"""
-    # First, try environment variable
-    env_dir = os.getenv("JOBS_FAISS_DIR")
-    if env_dir:
-        return env_dir
+# Production-safe directory initialization
+def get_faiss_index_dir() -> str:
+    """
+    Get and ensure FAISS index directory exists with proper error handling
+    """
+    # First, check if explicit env var is set
+    explicit_dir = os.getenv("JOBS_FAISS_DIR")
+    if explicit_dir:
+        index_dir = explicit_dir
+    else:
+        # Fallback: calculate from file location
+        try:
+            employee_services_dir = os.path.dirname(os.path.abspath(__file__))
+            services_dir = os.path.dirname(employee_services_dir)
+            project_root = os.path.dirname(services_dir)
+            index_dir = os.path.join(project_root, "faiss_jobs_index")
+        except Exception as e:
+            logger.error(f"Failed to calculate PROJECT_ROOT: {e}")
+            # Emergency fallback to /tmp or current directory
+            index_dir = os.path.join(os.getcwd(), "faiss_jobs_index")
     
-    # Check if we're in production environment
-    is_production = os.getenv("ENVIRONMENT") == "production" or os.getenv("NODE_ENV") == "production"
-    
-    if is_production:
-        # Production-specific directory options with fallbacks
-        production_paths = [
-            os.path.join(PROJECT_ROOT, "faiss_index"),  # Project directory
-            "/tmp/faiss_index",  # System temp (usually writable)
-            "/var/tmp/faiss_index",  # Persistent temp
-            os.path.expanduser("~/faiss_index"),  # User home directory
-        ]
+    # Ensure directory exists with proper error handling
+    try:
+        Path(index_dir).mkdir(parents=True, exist_ok=True)
+        logger.info(f"FAISS index directory ready: {index_dir}")
         
-        for path in production_paths:
-            try:
-                os.makedirs(path, exist_ok=True, mode=0o755)
-                # Test write permission
-                test_file = os.path.join(path, ".write_test")
-                with open(test_file, 'w') as f:
-                    f.write("test")
-                os.remove(test_file)
-                print(f"DEBUG: Using production directory: {path}")
-                return path
-            except Exception as e:
-                print(f"DEBUG: Directory {path} not usable: {e}")
-                continue
+        # Test write permissions
+        test_file = os.path.join(index_dir, ".write_test")
+        with open(test_file, 'w') as f:
+            f.write("test")
+        os.remove(test_file)
+        logger.info(f"Write permissions verified for: {index_dir}")
         
-        # Last resort: current working directory
-        cwd_path = os.path.join(os.getcwd(), "faiss_index")
-        os.makedirs(cwd_path, exist_ok=True, mode=0o755)
-        print(f"DEBUG: Using current directory as fallback: {cwd_path}")
-        return cwd_path
+    except PermissionError as e:
+        logger.error(f"Permission denied creating/writing to {index_dir}: {e}")
+        # Try to use alternative directory
+        alt_dir = os.path.join("/tmp", "faiss_jobs_index")
+        logger.warning(f"Attempting fallback directory: {alt_dir}")
+        try:
+            Path(alt_dir).mkdir(parents=True, exist_ok=True)
+            index_dir = alt_dir
+            logger.info(f"Using fallback FAISS directory: {alt_dir}")
+        except Exception as e2:
+            logger.error(f"Fallback directory also failed: {e2}")
+            raise
+    except Exception as e:
+        logger.error(f"Unexpected error initializing FAISS directory: {e}")
+        raise
     
-    # Development: use project root
-    return os.path.join(PROJECT_ROOT, "faiss_index")
+    return index_dir
 
-INDEX_DIR = get_index_dir()
+
+INDEX_DIR = get_faiss_index_dir()
 TOP_K = int(os.getenv("JOBS_RETRIEVE_TOP_K", "25"))
+
 
 @dataclass
 class JobRow:
@@ -123,179 +130,71 @@ class JobVectorStore:
             print(f"Content preview: {doc.page_content[:200]}...")
             print("---")
 
-    def _ensure_directory_access(self) -> bool:
-        """Ensure directory exists and is accessible with detailed debugging"""
-        print(f"DEBUG: Ensuring FAISS index directory: {INDEX_DIR}")
-        print(f"DEBUG: Current working directory: {os.getcwd()}")
-        print(f"DEBUG: User: {os.getenv('USER', 'unknown')}")
-        
-        try:
-            # Create directory if it doesn't exist
-            if not os.path.exists(INDEX_DIR):
-                print(f"DEBUG: Creating directory: {INDEX_DIR}")
-                os.makedirs(INDEX_DIR, mode=0o755, exist_ok=True)
-            
-            # Verify directory exists and is accessible
-            if not os.path.exists(INDEX_DIR):
-                raise OSError(f"Failed to create directory: {INDEX_DIR}")
-            
-            if not os.path.isdir(INDEX_DIR):
-                raise OSError(f"Path exists but is not a directory: {INDEX_DIR}")
-            
-            # Check permissions
-            if not os.access(INDEX_DIR, os.W_OK):
-                raise OSError(f"Directory not writable: {INDEX_DIR}")
-            if not os.access(INDEX_DIR, os.X_OK):
-                raise OSError(f"Directory not executable: {INDEX_DIR}")
-            
-            # Test write capability
-            test_file = os.path.join(INDEX_DIR, ".perm_test")
-            try:
-                with open(test_file, 'w') as f:
-                    f.write("test")
-                os.remove(test_file)
-            except Exception as e:
-                raise OSError(f"Cannot write to directory: {e}")
-            
-            print(f"DEBUG: Directory validated successfully: {INDEX_DIR}")
-            print(f"DEBUG: Directory permissions: {oct(os.stat(INDEX_DIR).st_mode)[-3:]}")
-            return True
-            
-        except Exception as e:
-            print(f"ERROR: Directory validation failed: {e}")
-            logger.error(f"Directory validation failed: {e}")
-            return False
-
     async def build_or_load(self, db: Prisma) -> None:
-        print(f"DEBUG: INDEX_DIR resolved to: {INDEX_DIR}")
-        print(f"DEBUG: PROJECT_ROOT: {PROJECT_ROOT}")
-        
-        # First, ensure directory access
-        if not self._ensure_directory_access():
-            # Try fallback to /tmp if primary directory fails
-            global INDEX_DIR
-            original_dir = INDEX_DIR
-            INDEX_DIR = "/tmp/faiss_index"
-            print(f"DEBUG: Trying fallback directory: {INDEX_DIR}")
-            
-            if not self._ensure_directory_access():
-                raise OSError(f"Failed to access both {original_dir} and fallback {INDEX_DIR}")
-        
-        # Optional: Load from disk if exists and not forcing rebuild
-        index_file = os.path.join(INDEX_DIR, "index.faiss")
-        if os.path.exists(index_file) and self.vs is None:
-            try:
-                print(f"DEBUG: Loading existing FAISS index from: {index_file}")
-                self.vs = FAISS.load_local(INDEX_DIR, self.embeddings, allow_dangerous_deserialization=True)
-                self._loaded = True
-                logger.info(f"FAISS index loaded from {INDEX_DIR}.")
-                print("DEBUG: Successfully loaded existing FAISS index")
-                return
-            except Exception as load_e:
-                print(f"DEBUG: Failed to load existing FAISS index: {load_e}. Rebuilding...")
-                logger.warning(f"Failed to load existing FAISS index: {load_e}. Rebuilding...")
+        if self._loaded and self.vs:
+            logger.info("Force rebuilding FAISS index from database to get latest jobs.")
+            self._loaded = False
+            self.vs = None
 
-        # Check if we should force rebuild
-        FORCE_REBUILD = os.getenv("FORCE_FAISS_REBUILD", "false").lower() == "true"
-        print(f"DEBUG: FORCE_REBUILD: {FORCE_REBUILD}, _loaded: {self._loaded}, vs exists: {self.vs is not None}")
-        
-        if self._loaded and self.vs and not FORCE_REBUILD:
-            print("DEBUG: Using existing in-memory FAISS index.")
-            logger.info("Using existing in-memory FAISS index.")
-            return
-
-        print("DEBUG: Building/rebuilding FAISS index from database...")
-        logger.info("Building/rebuilding FAISS index from database...")
-        
+        # Ensure directory exists - this will be called at module load time,
+        # but double-check before building
         try:
-            jobs = await db.job.find_many()
-            print(f"DEBUG: Found {len(jobs)} jobs for indexing.")
-            logger.info(f"Found {len(jobs)} jobs for indexing.")
-            
-            docs: List[Document] = [self._job_to_document(JobRow(
-                id=j.id,
-                title=j.title,
-                description=j.description,
-                recruiterId=j.recruiterId,
-                location=getattr(j, "location", None),
-                type=getattr(j, "type", None)
-            )) for j in jobs]
-
-            if not docs:
-                print("DEBUG: No jobs found, creating placeholder index.")
-                logger.warning("No jobs found to index. Creating placeholder index.")
-                self.vs = FAISS.from_texts(["NO_JOBS"], self.embeddings, metadatas=[{"placeholder": True}])
-            else:
-                self.vs = FAISS.from_documents(docs, self.embeddings)
-                print(f"DEBUG: Indexed {len(docs)} job documents.")
-                logger.info(f"Indexed {len(docs)} job documents.")
-                # Debug: print jobs after building
-                print("DEBUG: Jobs indexed from database:")
-                self.debug_jobs()
-
-            # Save the index
-            print(f"DEBUG: Saving index to {INDEX_DIR}")
-            try:
-                self.vs.save_local(INDEX_DIR)
-                print(f"DEBUG: FAISS index saved successfully to {INDEX_DIR}.")
-                logger.info(f"FAISS index saved successfully to {INDEX_DIR}.")
-                
-                # Verify the files were created
-                expected_files = ["index.faiss", "index.pkl"]
-                for file in expected_files:
-                    file_path = os.path.join(INDEX_DIR, file)
-                    if os.path.exists(file_path):
-                        print(f"DEBUG: Created file: {file_path} (size: {os.path.getsize(file_path)} bytes)")
-                    else:
-                        print(f"WARNING: Expected file not found: {file_path}")
-                        
-            except Exception as save_error:
-                print(f"ERROR: Failed to save FAISS index: {save_error}")
-                logger.error(f"Failed to save FAISS index: {save_error}")
-                # Don't re-raise, keep the in-memory index
-       
+            Path(INDEX_DIR).mkdir(parents=True, exist_ok=True)
+            logger.info(f"FAISS index directory verified: {INDEX_DIR}")
         except Exception as e:
-            print(f"ERROR: Failed to build FAISS index: {e}")
-            logger.error(f"Failed to build FAISS index: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-            # Fallback: Create minimal in-memory index if possible
-            try:
-                self.vs = FAISS.from_texts(["INDEX_BUILD_FAILED"], self.embeddings, metadatas=[{"error": str(e)}])
-                print("DEBUG: Fallback in-memory index created.")
-                logger.info("Fallback in-memory index created.")
-            except Exception as fallback_e:
-                print(f"CRITICAL: Fallback index also failed: {fallback_e}")
-                logger.critical(f"Fallback index also failed: {fallback_e}")
-                self.vs = None
-            raise  # Re-raise to alert in prod
+            logger.error(f"Failed to ensure FAISS directory exists: {e}")
+            raise
+
+        logger.info("Building FAISS index from database...")
+        jobs = await db.job.find_many()
+        logger.info(f"Found {len(jobs)} jobs for indexing.")
+        docs: List[Document] = [self._job_to_document(JobRow(
+            id=j.id,
+            title=j.title,
+            description=j.description,
+            recruiterId=j.recruiterId,
+            location=getattr(j, "location", None),
+            type=getattr(j, "type", None)
+        )) for j in jobs]
+
+        if not docs:
+            logger.warning("No jobs found to index. Creating placeholder index.")
+            self.vs = FAISS.from_texts(["NO_JOBS"], self.embeddings, metadatas=[{"placeholder": True}])
+        else:
+            self.vs = FAISS.from_documents(docs, self.embeddings)
+            logger.info(f"Indexed {len(docs)} job documents.")
+            print("DEBUG: Jobs indexed from database:")
+            self.debug_jobs()
+
+        # Save the index with proper error handling
+        try:
+            self.vs.save_local(INDEX_DIR)
+            logger.info(f"FAISS index saved successfully to {INDEX_DIR}.")
+        except PermissionError as e:
+            logger.error(f"Permission denied saving FAISS index to {INDEX_DIR}: {e}")
+            logger.warning("Index exists in memory but could not be persisted. This may cause issues on restart.")
+        except Exception as e:
+            logger.error(f"Failed to save FAISS index: {e}")
+            logger.warning("Index exists in memory but could not be persisted. This may cause issues on restart.")
         
         self._loaded = True
-        print(f"DEBUG: Build complete, _loaded set to True, vs: {self.vs is not None}")
     
     def retrieve_jobs(self, query_text: str, recruiter_id: str, k: int = TOP_K) -> List[Document]:
         if not self.vs:
-            print("DEBUG: No vector store for retrieve_jobs.")
             return []
-        # Retrieve top-K relevant jobs from FAISS
         docs = self.vs.similarity_search(query_text, k=k)
-        # Filter by recruiterId
         return [d for d in docs if d.metadata.get("recruiterId") == recruiter_id]
 
     def retrieve_jobs_with_scores(self, query_text: str, recruiter_id: str, k: int = TOP_K) -> List[Dict[str, Any]]:
         """Retrieve jobs with similarity scores using FAISS embeddings"""
         if not self.vs:
-            print("DEBUG: No vector store for retrieve_jobs_with_scores.")
             return []
         
-        # Search with scores for top k relevant
         results = self.vs.similarity_search_with_score(query_text, k=k)
         
-        # Filter by recruiter and format
         scored_jobs = []
         for doc, score in results:
             if doc.metadata.get("recruiterId") == recruiter_id:
-                # Convert distance to similarity score (0-100), ensure float
                 similarity_score = float((1 - min(float(score), 1.0)) * 100)
                 scored_jobs.append({
                     'title': doc.metadata.get('title'),
@@ -303,7 +202,6 @@ class JobVectorStore:
                     'document': doc
                 })
         
-        print(f"DEBUG: Retrieved {len(scored_jobs)} scored jobs for recruiter {recruiter_id}.")
         return scored_jobs
 
 
@@ -316,7 +214,6 @@ class JobRecommendationService:
         self.llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
         self.vstore = JobVectorStore.get(self.embeddings)
         
-        # Prompt template for batch LLM scoring
         self.scoring_prompt = PromptTemplate(
             input_variables=["employee_profile", "jobs_list"],
             template="""
@@ -341,9 +238,7 @@ Respond ONLY with the JSON object.
         """Extract and preprocess features from employee data"""
         features = {}
         
-        # Text features
         bio = employee_info.get('bio', '')
-        # Robust extraction for skills: handle both dicts and strings
         skills_list = employee_info.get('skills', [])
         skills_names = []
         for skill in skills_list:
@@ -353,7 +248,6 @@ Respond ONLY with the JSON object.
                 skills_names.append(str(skill))
         skills = ' '.join([s.lower() for s in skills_names])
         
-        # Handle arrays for education (robust)
         education_list = employee_info.get('education', [])
         education_names = []
         for edu in education_list:
@@ -363,7 +257,6 @@ Respond ONLY with the JSON object.
                 education_names.append(str(edu))
         education = ' '.join([e.lower() for e in education_names if e])
         
-        # Handle arrays for experience (robust)
         experience_list = employee_info.get('experience', [])
         experience_names = []
         for exp in experience_list:
@@ -377,7 +270,6 @@ Respond ONLY with the JSON object.
         features['text_data'] = re.sub(r'[^\w\s]', '', features['text_data'])
         features['text_data'] = re.sub(r'\s+', ' ', features['text_data']).strip().lower()
         
-        # Handle array fields - convert to strings (robust)
         department_list = employee_info.get('department', [])
         department_names = []
         for dept in department_list:
@@ -398,7 +290,6 @@ Respond ONLY with the JSON object.
         
         features['skills_list'] = [s.lower() for s in skills_names]
         
-        # Create a formatted employee profile for LLM (use extracted names)
         features['employee_profile'] = (
             f"Name: {employee_info.get('firstName', '')} {employee_info.get('lastName', '')}\n"
             f"Bio: {employee_info.get('bio', '')}\n"
@@ -410,7 +301,6 @@ Respond ONLY with the JSON object.
             f"Salary Expectation: {employee_info.get('salary', 'Not specified')}"
         )
         
-        # Optimized query for FAISS retrieval focusing on skills, department, position
         features['optimized_query'] = (
             f"skills: {skills} department: {features['department']} position: {features['position']} "
             f"experience: {experience} education: {education}"
@@ -423,7 +313,6 @@ Respond ONLY with the JSON object.
         if not job_docs:
             return []
         
-        # Batch LLM scoring
         jobs_list = "\n".join([
             f"{i+1}. Title: {doc.metadata['title']}\nDescription: {doc.page_content}" 
             for i, doc in enumerate(job_docs)
@@ -435,7 +324,6 @@ Respond ONLY with the JSON object.
                 employee_profile=employee_features['employee_profile'],
                 jobs_list=jobs_list
             )
-            # Parse JSON response
             parsed = json.loads(llm_response.strip())
             llm_score_dict = {k: float(v) for k, v in parsed.items() if isinstance(v, (int, float))}
             logger.info("Batch LLM scoring successful.")
@@ -459,21 +347,15 @@ Respond ONLY with the JSON object.
         return enhanced_scores
 
     async def recommend_jobs_for_employee(self, user_id: str, recruiter_id: str) -> List[Dict[str, Any]]:
-        print(f"DEBUG: Starting recommend_jobs_for_employee for user {user_id}, recruiter {recruiter_id}")
         db = Prisma()
         await db.connect()
         
         try:
-            # Build/load FAISS store (this will create directory and save first time if needed)
-            print("DEBUG: Calling build_or_load...")
             await self.vstore.build_or_load(db)
-            print(f"DEBUG: After build_or_load, _loaded: {self.vstore._loaded}, vs: {self.vstore.vs is not None}")
             
-            # Debug: print all jobs in store before recommendation
             print("DEBUG: All jobs in vector store before recommendation:")
             self.vstore.debug_jobs()
             
-            # Fetch user data with proper handling of array fields
             user = await db.user.find_unique(
                 where={"id": user_id},
                 include={"employee": True}
@@ -482,7 +364,6 @@ Respond ONLY with the JSON object.
             if not user:
                 raise ValueError("User not found")
 
-            # Build employee info with proper array handling
             employee_info = {
                 "firstName": user.firstName or "",
                 "lastName": user.lastName or "",
@@ -490,24 +371,19 @@ Respond ONLY with the JSON object.
                 "skills": getattr(user.employee, "skills", []) if user.employee else [],
                 "education": getattr(user.employee, "education", []) if user.employee else [],
                 "experience": getattr(user.employee, "experience", []) if user.employee else [],
-                "position": user.position or [],  # This is now an array
-                "department": user.department or [],  # This is now an array
+                "position": user.position or [],
+                "department": user.department or [],
                 "salary": user.salary or ""
             }
 
-            # Extract features
             employee_features = self._extract_features(employee_info)
-            print(f"DEBUG: Optimized query: {employee_features['optimized_query'][:200]}...")  # Truncated for log
             
-            # Retrieve top relevant jobs using the optimized query for FAISS
             query_text = employee_features['optimized_query']
             embedding_scored = self.vstore.retrieve_jobs_with_scores(query_text, recruiter_id, k=50)
             
             if not embedding_scored:
-                print("DEBUG: No embedding_scored results.")
                 return []
             
-            # Deduplicate by title: pick the best embedding score per title
             title_groups = defaultdict(list)
             for item in embedding_scored:
                 title_groups[item['title']].append(item)
@@ -520,14 +396,11 @@ Respond ONLY with the JSON object.
                 emb_score_dict[title] = best_item['match_score']
             
             unique_docs = [item['document'] for item in unique_items]
-            print(f"DEBUG: Unique items after dedup: {len(unique_items)}")
             
-            # Calculate similarity scores using LLM (batched)
             try:
                 recommended_jobs = self._calculate_similarity(employee_features, unique_docs, emb_score_dict)
             except Exception as e:
                 logger.warning(f"LLM similarity failed: {e}")
-                # Fallback to embedding scores only
                 recommended_jobs = [
                     {
                         'id': item['document'].metadata['id'],
@@ -538,10 +411,8 @@ Respond ONLY with the JSON object.
                     for item in unique_items
                 ]
             
-            # Get final job details from database by ID
             ids = [j['id'] for j in recommended_jobs]
             if not ids:
-                print("DEBUG: No IDs for final fetch.")
                 return []
                 
             final_jobs = await db.job.find_many(
@@ -549,7 +420,6 @@ Respond ONLY with the JSON object.
                 include={"recruiter": True}
             )
             
-            # Merge with scores
             final_jobs_with_scores = []
             for job in final_jobs:
                 score_data = next((r for r in recommended_jobs if r['id'] == job.id), None)
@@ -570,13 +440,10 @@ Respond ONLY with the JSON object.
                         }
                     })
             
-            # Sort by score and return all relevant results
             final_jobs_with_scores.sort(key=lambda x: x["match_score"], reverse=True)
-            print(f"DEBUG: Returning {len(final_jobs_with_scores)} recommended jobs.")
             return final_jobs_with_scores
             
         except Exception as e:
-            print(f"ERROR: Error in job recommendation: {e}")
             logger.error(f"Error in job recommendation: {e}")
             import traceback
             logger.error(traceback.format_exc())
