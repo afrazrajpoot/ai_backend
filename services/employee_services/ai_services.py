@@ -14,59 +14,8 @@ from langchain.schema import Document
 from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
 
-# Production-safe directory initialization
-def get_faiss_index_dir() -> str:
-    """
-    Get and ensure FAISS index directory exists with proper error handling
-    """
-    # First, check if explicit env var is set
-    explicit_dir = os.getenv("JOBS_FAISS_DIR")
-    if explicit_dir:
-        index_dir = explicit_dir
-    else:
-        # Fallback: calculate from file location
-        try:
-            employee_services_dir = os.path.dirname(os.path.abspath(__file__))
-            services_dir = os.path.dirname(employee_services_dir)
-            project_root = os.path.dirname(services_dir)
-            index_dir = os.path.join(project_root, "faiss_jobs_index")
-        except Exception as e:
-            print(f"❌ Failed to calculate PROJECT_ROOT: {e}")
-            # Emergency fallback to /tmp or current directory
-            index_dir = os.path.join(os.getcwd(), "faiss_jobs_index")
-    
-    # Ensure directory exists with proper error handling
-    try:
-        Path(index_dir).mkdir(parents=True, exist_ok=True)
-        print(f"✅ FAISS index directory ready: {index_dir}")
-        
-        # Test write permissions
-        test_file = os.path.join(index_dir, ".write_test")
-        with open(test_file, 'w') as f:
-            f.write("test")
-        os.remove(test_file)
-        print(f"✅ Write permissions verified for: {index_dir}")
-        
-    except PermissionError as e:
-        print(f"❌ Permission denied creating/writing to {index_dir}: {e}")
-        # Try to use alternative directory
-        alt_dir = os.path.join("/tmp", "faiss_jobs_index")
-        print(f"⚠️ Attempting fallback directory: {alt_dir}")
-        try:
-            Path(alt_dir).mkdir(parents=True, exist_ok=True)
-            index_dir = alt_dir
-            print(f"✅ Using fallback FAISS directory: {alt_dir}")
-        except Exception as e2:
-            print(f"❌ Fallback directory also failed: {e2}")
-            raise
-    except Exception as e:
-        print(f"❌ Unexpected error initializing FAISS directory: {e}")
-        raise
-    
-    return index_dir
-
-
-INDEX_DIR = get_faiss_index_dir()
+# Static FAISS directory path for production
+INDEX_DIR = "faiss_jobs_index"  # Change this to your desired static path
 TOP_K = int(os.getenv("JOBS_RETRIEVE_TOP_K", "25"))
 
 
@@ -131,6 +80,7 @@ class JobVectorStore:
     async def build_or_load(self, db: Prisma) -> None:
         print(f"🚀 === FAISS build_or_load started ===")
         print(f"📝 Current state - _loaded: {self._loaded}, vs exists: {self.vs is not None}")
+        print(f"📁 Using static INDEX_DIR: {INDEX_DIR}")
         
         # Check if already loaded and index exists
         if self._loaded and self.vs:
@@ -138,16 +88,26 @@ class JobVectorStore:
             self._loaded = False
             self.vs = None
 
-        # Ensure directory exists
+        # Check if directory exists (static path - no auto-creation)
+        if not os.path.exists(INDEX_DIR):
+            print(f"❌ FAISS directory does not exist: {INDEX_DIR}")
+            print(f"💡 Please create the directory manually on the server:")
+            print(f"   mkdir -p {INDEX_DIR}")
+            print(f"   chmod 755 {INDEX_DIR}")
+            raise FileNotFoundError(f"FAISS directory not found: {INDEX_DIR}. Please create it manually.")
+
+        # Check write permissions
         try:
-            Path(INDEX_DIR).mkdir(parents=True, exist_ok=True)
-            print(f"✅ FAISS index directory verified: {INDEX_DIR}")
-            
-            # List contents if directory exists
-            contents = os.listdir(INDEX_DIR)
-            print(f"✅ Directory contents: {contents}")
-        except Exception as e:
-            print(f"❌ Failed to ensure FAISS directory exists: {e}")
+            test_file = os.path.join(INDEX_DIR, ".write_test")
+            with open(test_file, 'w') as f:
+                f.write("test")
+            os.remove(test_file)
+            print(f"✅ Write permissions verified for: {INDEX_DIR}")
+        except PermissionError as e:
+            print(f"❌ No write permission to FAISS directory: {INDEX_DIR}")
+            print(f"💡 Please fix permissions:")
+            print(f"   chown -R $(whoami) {INDEX_DIR}")
+            print(f"   chmod 755 {INDEX_DIR}")
             raise
 
         print("📥 Fetching jobs from database...")
@@ -181,8 +141,8 @@ class JobVectorStore:
             for i, (doc_id, doc) in enumerate(list(self.vs.docstore._dict.items())[:5]):
                 print(f"  📝 Sample doc {i}: ID={doc_id}, title={doc.metadata.get('title')}, recruiter={doc.metadata.get('recruiterId')}")
 
-        # Save the index with proper error handling
-        print(f"💾 Attempting to save FAISS index to {INDEX_DIR}...")
+        # Save the index
+        print(f"💾 Saving FAISS index to {INDEX_DIR}...")
         try:
             self.vs.save_local(INDEX_DIR)
             print(f"✅ FAISS index saved successfully to {INDEX_DIR}")
@@ -190,15 +150,12 @@ class JobVectorStore:
             # Verify saved files
             saved_contents = os.listdir(INDEX_DIR)
             print(f"✅ Saved files in directory: {saved_contents}")
-        except PermissionError as e:
-            print(f"❌ Permission denied saving FAISS index to {INDEX_DIR}: {e}")
-            print(f"  Please run: sudo chown -R $(whoami) {INDEX_DIR}")
-            print("  ⚠️ Index exists in memory but could not be persisted.")
         except Exception as e:
             print(f"❌ Failed to save FAISS index: {e}")
             import traceback
             print(f"❌ Traceback: {traceback.format_exc()}")
             print("  ⚠️ Index exists in memory but could not be persisted.")
+            raise
         
         self._loaded = True
         print(f"✅ === FAISS build_or_load completed, _loaded={self._loaded} ===")
