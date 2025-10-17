@@ -14,8 +14,17 @@ from langchain.schema import Document
 from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
 
-# Static FAISS directory path for production
-INDEX_DIR = "faiss_jobs_index"  # Change this to your desired static path
+# FAISS directory path inside services folder
+def get_faiss_index_dir() -> str:
+    """
+    Get FAISS index directory inside services folder
+    """
+    # Get the directory where this script is located
+    current_file_dir = os.path.dirname(os.path.abspath(__file__))
+    index_dir = os.path.join(current_file_dir, "faiss_jobs_index")
+    return index_dir
+
+INDEX_DIR = get_faiss_index_dir()
 TOP_K = int(os.getenv("JOBS_RETRIEVE_TOP_K", "25"))
 
 
@@ -80,7 +89,7 @@ class JobVectorStore:
     async def build_or_load(self, db: Prisma) -> None:
         print(f"🚀 === FAISS build_or_load started ===")
         print(f"📝 Current state - _loaded: {self._loaded}, vs exists: {self.vs is not None}")
-        print(f"📁 Using static INDEX_DIR: {INDEX_DIR}")
+        print(f"📁 Using INDEX_DIR: {INDEX_DIR}")
         
         # Check if already loaded and index exists
         if self._loaded and self.vs:
@@ -88,16 +97,12 @@ class JobVectorStore:
             self._loaded = False
             self.vs = None
 
-        # Check if directory exists (static path - no auto-creation)
-        if not os.path.exists(INDEX_DIR):
-            print(f"❌ FAISS directory does not exist: {INDEX_DIR}")
-            print(f"💡 Please create the directory manually on the server:")
-            print(f"   mkdir -p {INDEX_DIR}")
-            print(f"   chmod 755 {INDEX_DIR}")
-            raise FileNotFoundError(f"FAISS directory not found: {INDEX_DIR}. Please create it manually.")
-
-        # Check write permissions
+        # Create directory if it doesn't exist
         try:
+            Path(INDEX_DIR).mkdir(parents=True, exist_ok=True)
+            print(f"✅ FAISS directory ensured: {INDEX_DIR}")
+            
+            # Check write permissions
             test_file = os.path.join(INDEX_DIR, ".write_test")
             with open(test_file, 'w') as f:
                 f.write("test")
@@ -106,8 +111,10 @@ class JobVectorStore:
         except PermissionError as e:
             print(f"❌ No write permission to FAISS directory: {INDEX_DIR}")
             print(f"💡 Please fix permissions:")
-            print(f"   chown -R $(whoami) {INDEX_DIR}")
             print(f"   chmod 755 {INDEX_DIR}")
+            raise
+        except Exception as e:
+            print(f"❌ Failed to create/verify FAISS directory: {e}")
             raise
 
         print("📥 Fetching jobs from database...")

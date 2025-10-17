@@ -24,9 +24,17 @@ llm = ChatOpenAI(
 # Initialize embeddings (global)
 embeddings = OpenAIEmbeddings(openai_api_key=os.getenv("OPENAI_API_KEY"))
 
-# Calculate INDEX_DIR consistently (use env var fallback to project root)
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-INDEX_DIR = os.getenv("JOBS_FAISS_DIR", os.path.join(PROJECT_ROOT, "faiss_jobs_index"))
+# Calculate INDEX_DIR to be inside services folder
+def get_faiss_index_dir() -> str:
+    """
+    Get FAISS index directory inside services folder
+    """
+    # Get the directory where this script is located (services folder)
+    current_file_dir = os.path.dirname(os.path.abspath(__file__))
+    index_dir = os.path.join(current_file_dir, "faiss_jobs_index")
+    return index_dir
+
+INDEX_DIR = get_faiss_index_dir()
 
 # Pydantic models for request validation
 class JobCreateRequest(BaseModel):
@@ -152,6 +160,7 @@ async def create_job(request: JobCreateRequest):
             logger.error(f"Failed to create/validate INDEX_DIR '{INDEX_DIR}': {dir_e}")
             raise HTTPException(status_code=500, detail=f"Cannot access index directory: {dir_e}")
 
+        # Create document for vector store
         doc = Document(
             page_content=(
                 f"Title: {job.title}\n"
@@ -167,7 +176,12 @@ async def create_job(request: JobCreateRequest):
             }
         )
         
-        if os.path.exists(os.path.join(INDEX_DIR, "index.faiss")) and os.path.exists(os.path.join(INDEX_DIR, "index.pkl")):
+        # Check if vector store exists in services/faiss_jobs_index
+        index_file = os.path.join(INDEX_DIR, "index.faiss")
+        pkl_file = os.path.join(INDEX_DIR, "index.pkl")
+        
+        if os.path.exists(index_file) and os.path.exists(pkl_file):
+            # Load existing vector store and add new job
             vectorstore = FAISS.load_local(
                 INDEX_DIR, 
                 embeddings, 
@@ -177,9 +191,11 @@ async def create_job(request: JobCreateRequest):
             vectorstore.add_documents([doc])
             logger.info(f"Added new job '{job.title}' (ID: {job.id}). Now has {len(vectorstore.docstore._dict)} documents.")
         else:
+            # Create new vector store with this job
             vectorstore = FAISS.from_documents([doc], embeddings)
             logger.info(f"Created new vector store with job '{job.title}' (ID: {job.id}). Has 1 document.")
         
+        # Save the updated vector store back to services/faiss_jobs_index
         vectorstore.save_local(INDEX_DIR)
         logger.info(f"Vector store saved to {INDEX_DIR}.")
 
