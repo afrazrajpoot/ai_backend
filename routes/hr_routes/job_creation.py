@@ -118,13 +118,16 @@ async def create_job(request: JobCreateRequest):
         await prisma_client.connect()
 
         # 🔹 Step 1: Normalize existing skills data (fix old inconsistent records)
-        jobs = await prisma_client.job.find_many()
-        for j in jobs:
+        old_jobs = await prisma_client.job.find_many()
+        for j in old_jobs:
             if isinstance(j.skills, list):
                 await prisma_client.job.update(
                     where={"id": j.id},
                     data={"skills": json.dumps(j.skills)}
                 )
+
+        # ✅ Re-fetch jobs after normalization to ensure in-memory data is up-to-date
+        jobs = await prisma_client.job.find_many()
 
         # 🔹 Step 2: Prepare skills JSON for the new job
         skills_json = json.dumps(request.skills) if request.skills else None
@@ -180,26 +183,27 @@ async def create_job(request: JobCreateRequest):
 
         vectorstore.save_local(index_path)
 
-        # 🔹 Step 7: (Optional) Add first previous job to FAISS for testing/debug
-        if os.getenv("DEBUG", "false").lower() == "true":
-            print("DEBUG: Fetching previous jobs...")
+        # 🔹 Step 7: Debug - Add one previous job to vectorstore
         previous_jobs = [j for j in jobs if j.id != job.id]
-
-        if os.getenv("DEBUG", "false").lower() == "true":
-            print(f"DEBUG: Total jobs: {len(jobs)}, Previous jobs: {len(previous_jobs)}")
+        print(f"DEBUG: Total jobs: {len(jobs)}, Previous jobs: {len(previous_jobs)}")
 
         if previous_jobs:
             first_previous_job = previous_jobs[0]
+            print(f"DEBUG: Adding previous job: {first_previous_job.title} (ID: {first_previous_job.id})")
 
-            if os.getenv("DEBUG", "false").lower() == "true":
-                print(f"DEBUG: Adding previous job: {first_previous_job.title} (ID: {first_previous_job.id})")
-
-            # Parse skills safely
-            previous_skills = (
-                json.loads(first_previous_job.skills)
-                if isinstance(first_previous_job.skills, str)
-                else (first_previous_job.skills or [])
-            )
+            # ✅ Safe skill parsing
+            if first_previous_job.skills:
+                if isinstance(first_previous_job.skills, str):
+                    try:
+                        previous_skills = json.loads(first_previous_job.skills)
+                    except json.JSONDecodeError:
+                        previous_skills = []
+                elif isinstance(first_previous_job.skills, list):
+                    previous_skills = first_previous_job.skills
+                else:
+                    previous_skills = []
+            else:
+                previous_skills = []
 
             doc_previous = Document(
                 page_content=(
@@ -223,18 +227,12 @@ async def create_job(request: JobCreateRequest):
             )
             vectorstore_previous.add_documents([doc_previous])
             vectorstore_previous.save_local(index_path)
-
-            if os.getenv("DEBUG", "false").lower() == "true":
-                print("DEBUG: Previous job added to vector store successfully.")
+            print("DEBUG: Previous job added to vector store successfully.")
         else:
-            if os.getenv("DEBUG", "false").lower() == "true":
-                print("DEBUG: No previous jobs found.")
+            print("DEBUG: No previous jobs found.")
 
-        # 🔹 Step 8: Return response
-        return {
-            "message": "Job created successfully",
-            "job": job
-        }
+        # 🔹 Step 8: Return success
+        return {"message": "Job created successfully", "job": job}
 
     except HTTPException:
         raise
