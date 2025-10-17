@@ -83,47 +83,73 @@ class JobVectorStore:
             print("---")
 
     async def build_or_load(self, db: Prisma) -> None:
-        if self._loaded and self.vs:
-            # Force rebuild to get latest data
-            logger.info("Force rebuilding FAISS index from database to get latest jobs.")
-            self._loaded = False
-            self.vs = None
+        # Optional: Load from disk if exists and not forcing rebuild (uncomment for prod caching)
+        # index_file = os.path.join(INDEX_DIR, "index.faiss")
+        # if os.path.exists(index_file) and self.vs is None:
+        #     try:
+        #         self.vs = FAISS.load_local(INDEX_DIR, self.embeddings, allow_dangerous_deserialization=True)
+        #         self._loaded = True
+        #         logger.info(f"FAISS index loaded from {INDEX_DIR}.")
+        #         return
+        #     except Exception as load_e:
+        #         logger.warning(f"Failed to load existing FAISS index: {load_e}. Rebuilding...")
 
-        # Ensure directory exists in project root
-        os.makedirs(INDEX_DIR, exist_ok=True)
-        logger.info(f"FAISS index directory ensured: {INDEX_DIR}")
-
-        logger.info("Building FAISS index from database...")
-        jobs = await db.job.find_many()
-        logger.info(f"Found {len(jobs)} jobs for indexing.")
-        docs: List[Document] = [self._job_to_document(JobRow(
-            id=j.id,
-            title=j.title,
-            description=j.description,
-            recruiterId=j.recruiterId,
-            location=getattr(j, "location", None),
-            type=getattr(j, "type", None)
-        )) for j in jobs]
-
-        if not docs:
-            logger.warning("No jobs found to index. Creating placeholder index.")
-            self.vs = FAISS.from_texts(["NO_JOBS"], self.embeddings, metadatas=[{"placeholder": True}])
-        else:
-            self.vs = FAISS.from_documents(docs, self.embeddings)
-            logger.info(f"Indexed {len(docs)} job documents.")
-            # Debug: print jobs after building
-            print("DEBUG: Jobs indexed from database:")
-            self.debug_jobs()
-    
-
-        # Save the index
+        # Ensure directory exists and is writable (create first, then validate)
+        logger.info(f"Ensuring FAISS index directory: {INDEX_DIR}")
         try:
+            os.makedirs(INDEX_DIR, exist_ok=True)
+            if not os.access(INDEX_DIR, os.W_OK | os.X_OK):
+                raise OSError(f"INDEX_DIR '{INDEX_DIR}' is not writable/executable after creation. Check perms.")
+            logger.info(f"FAISS index directory validated: {INDEX_DIR}")
+        except Exception as e:
+            logger.error(f"Failed to create/validate INDEX_DIR '{INDEX_DIR}': {e}")
+            raise OSError(f"Cannot create/access INDEX_DIR '{INDEX_DIR}': {e}")
+
+        # Optional: Skip force-rebuild in prod (set via env or flag)
+        FORCE_REBUILD = os.getenv("FORCE_FAISS_REBUILD", "false").lower() == "true"
+        if self._loaded and self.vs and not FORCE_REBUILD:
+            logger.info("Using existing in-memory FAISS index.")
+            return
+
+        logger.info("Building/rebuilding FAISS index from database...")
+        try:
+            jobs = await db.job.find_many()
+            logger.info(f"Found {len(jobs)} jobs for indexing.")
+            docs: List[Document] = [self._job_to_document(JobRow(
+                id=j.id,
+                title=j.title,
+                description=j.description,
+                recruiterId=j.recruiterId,
+                location=getattr(j, "location", None),
+                type=getattr(j, "type", None)
+            )) for j in jobs]
+
+            if not docs:
+                logger.warning("No jobs found to index. Creating placeholder index.")
+                self.vs = FAISS.from_texts(["NO_JOBS"], self.embeddings, metadatas=[{"placeholder": True}])
+            else:
+                self.vs = FAISS.from_documents(docs, self.embeddings)
+                logger.info(f"Indexed {len(docs)} job documents.")
+                # Debug: print jobs after building (keep for now, remove in full prod)
+                print("DEBUG: Jobs indexed from database:")
+                self.debug_jobs()
+
+            # Save the index
             self.vs.save_local(INDEX_DIR)
             logger.info(f"FAISS index saved successfully to {INDEX_DIR}.")
        
         except Exception as e:
-            logger.error(f"Failed to save FAISS index: {e}")
-            # Continue anyway since we have the index in memory
+            logger.error(f"Failed to build FAISS index: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            # Fallback: Create minimal in-memory index if possible
+            try:
+                self.vs = FAISS.from_texts(["INDEX_BUILD_FAILED"], self.embeddings, metadatas=[{"error": str(e)}])
+                logger.info("Fallback in-memory index created.")
+            except Exception as fallback_e:
+                logger.critical(f"Fallback index also failed: {fallback_e}")
+                self.vs = None
+            raise  # Re-raise to alert in prod
         
         self._loaded = True
     
@@ -268,6 +294,7 @@ Respond ONLY with the JSON object.
         ).strip()
         
         return features
+
     def _calculate_similarity(self, employee_features: Dict[str, Any], job_docs: List[Document], emb_score_dict: Dict[str, float]) -> List[Dict[str, Any]]:
         """Calculate similarity scores using batch LLM"""
         if not job_docs:

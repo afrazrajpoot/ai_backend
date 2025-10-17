@@ -1,4 +1,3 @@
-# routes/hr_routes/job_creation.py - Complete job creation and description generation routes
 from fastapi import APIRouter, HTTPException, status, Body
 from prisma import Prisma, Json
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
@@ -9,8 +8,11 @@ from pydantic import BaseModel
 from typing import Optional, List
 import os
 import json
+import logging
 
 router = APIRouter()
+
+logger = logging.getLogger(__name__)
 
 # Initialize LangChain LLM (global)
 llm = ChatOpenAI(
@@ -21,6 +23,10 @@ llm = ChatOpenAI(
 
 # Initialize embeddings (global)
 embeddings = OpenAIEmbeddings(openai_api_key=os.getenv("OPENAI_API_KEY"))
+
+# Calculate INDEX_DIR consistently (use env var fallback to project root)
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+INDEX_DIR = os.getenv("JOBS_FAISS_DIR", os.path.join(PROJECT_ROOT, "faiss_jobs_index"))
 
 # Pydantic models for request validation
 class JobCreateRequest(BaseModel):
@@ -108,7 +114,7 @@ async def generate_description(request: DescriptionGenerateRequest):
         }
 
     except Exception as e:
-        print(f"AI Error generating description: {e}")
+        logger.error(f"AI Error generating description: {e}")
         raise HTTPException(status_code=500, detail="Failed to generate description")
 
 @router.post("/jobs/create")
@@ -135,10 +141,16 @@ async def create_job(request: JobCreateRequest):
             }
         )
 
-        # Add job to FAISS vector store in project root
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        index_path = os.path.join(project_root, "faiss_jobs_index")
-        os.makedirs(index_path, exist_ok=True)
+        # Validate and ensure INDEX_DIR exists and is writable
+        logger.info(f"Ensuring FAISS index directory: {INDEX_DIR}")
+        try:
+            os.makedirs(INDEX_DIR, exist_ok=True)
+            if not os.access(INDEX_DIR, os.W_OK | os.X_OK):
+                raise OSError(f"INDEX_DIR '{INDEX_DIR}' is not writable/executable after creation. Check permissions.")
+            logger.info(f"FAISS index directory validated: {INDEX_DIR}")
+        except Exception as dir_e:
+            logger.error(f"Failed to create/validate INDEX_DIR '{INDEX_DIR}': {dir_e}")
+            raise HTTPException(status_code=500, detail=f"Cannot access index directory: {dir_e}")
 
         doc = Document(
             page_content=(
@@ -155,21 +167,21 @@ async def create_job(request: JobCreateRequest):
             }
         )
         
-        if os.path.exists(os.path.join(index_path, "index.faiss")) and os.path.exists(os.path.join(index_path, "index.pkl")):
+        if os.path.exists(os.path.join(INDEX_DIR, "index.faiss")) and os.path.exists(os.path.join(INDEX_DIR, "index.pkl")):
             vectorstore = FAISS.load_local(
-                index_path, 
+                INDEX_DIR, 
                 embeddings, 
                 allow_dangerous_deserialization=True
             )
-            print(f"DEBUG: Loaded existing vector store with {len(vectorstore.docstore._dict)} documents.")
+            logger.info(f"Loaded existing vector store with {len(vectorstore.docstore._dict)} documents.")
             vectorstore.add_documents([doc])
-            print(f"DEBUG: Added new job '{job.title}' (ID: {job.id}). Now has {len(vectorstore.docstore._dict)} documents.")
+            logger.info(f"Added new job '{job.title}' (ID: {job.id}). Now has {len(vectorstore.docstore._dict)} documents.")
         else:
             vectorstore = FAISS.from_documents([doc], embeddings)
-            print(f"DEBUG: Created new vector store with job '{job.title}' (ID: {job.id}). Has 1 document.")
+            logger.info(f"Created new vector store with job '{job.title}' (ID: {job.id}). Has 1 document.")
         
-        vectorstore.save_local(index_path)
-        print(f"DEBUG: Vector store saved to {index_path}.")
+        vectorstore.save_local(INDEX_DIR)
+        logger.info(f"Vector store saved to {INDEX_DIR}.")
 
         return {
             "message": "Job created successfully",
@@ -179,7 +191,7 @@ async def create_job(request: JobCreateRequest):
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error creating job: {e}")
+        logger.error(f"Error creating job: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
     finally:
         await prisma_client.disconnect()
