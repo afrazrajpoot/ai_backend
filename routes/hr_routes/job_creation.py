@@ -26,13 +26,10 @@ embeddings = OpenAIEmbeddings(openai_api_key=os.getenv("OPENAI_API_KEY"))
 
 # Calculate INDEX_DIR to be inside services folder
 def get_faiss_index_dir() -> str:
-    """
-    Get FAISS index directory inside services folder
-    """
-    # Get the directory where this script is located (services folder)
-    current_file_dir = os.path.dirname(os.path.abspath(__file__))
-    index_dir = os.path.join(current_file_dir, "faiss_jobs_index")
+    index_dir = os.getenv("FAISS_INDEX_PATH", os.path.join(os.path.dirname(__file__), "faiss_jobs_index"))
+    os.makedirs(index_dir, exist_ok=True)
     return index_dir
+
 
 INDEX_DIR = get_faiss_index_dir()
 

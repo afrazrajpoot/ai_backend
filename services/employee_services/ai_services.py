@@ -16,13 +16,10 @@ from langchain.chains import LLMChain
 
 # FAISS directory path inside services folder
 def get_faiss_index_dir() -> str:
-    """
-    Get FAISS index directory inside services folder
-    """
-    # Get the directory where this script is located
-    current_file_dir = os.path.dirname(os.path.abspath(__file__))
-    index_dir = os.path.join(current_file_dir, "faiss_jobs_index")
+    index_dir = os.getenv("FAISS_INDEX_PATH", os.path.join(os.path.dirname(__file__), "faiss_jobs_index"))
+    os.makedirs(index_dir, exist_ok=True)
     return index_dir
+
 
 INDEX_DIR = get_faiss_index_dir()
 TOP_K = int(os.getenv("JOBS_RETRIEVE_TOP_K", "25"))
