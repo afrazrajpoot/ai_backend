@@ -195,6 +195,9 @@ async def create_job(request: JobCreateRequest):
         # Save the updated vector store back to services/faiss_jobs_index
         vectorstore.save_local(INDEX_DIR)
         logger.info(f"Vector store saved to {INDEX_DIR}.")
+        logger.info(f"Vectorstore docstore size: {len(vectorstore.docstore._dict)}")
+        logger.info(f"FAISS index total vectors: {vectorstore.index.ntotal}")
+
 
         return {
             "message": "Job created successfully",

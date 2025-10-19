@@ -75,7 +75,7 @@ class AIService:
         if cls._vector_store is not None and not force_rebuild:
             return cls._vector_store
 
-        faiss_path = "faiss_index"
+        faiss_path = os.getenv("FAISS_INDEX_PATH", "faiss_index")
         embeddings = cls._get_embeddings()
         
         pdf_files = [
