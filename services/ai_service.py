@@ -534,9 +534,8 @@ class AIService:
         return metrics
 
 
-
     @classmethod
-    async def generate_career_recommendation(cls, analysis_result: str, all_answers: Any) -> Dict[str, Any]:
+    async def generate_career_recommendation(cls, analysis_result: str, all_answers: Any, is_paid: bool = False) -> Dict[str, Any]:
         try:
             # Check if analysis_result is empty or invalid
             logger.info(f"Analysis result received: {analysis_result[:500]}...")
@@ -546,6 +545,7 @@ class AIService:
             # Parse key metrics from analysis_result
             parsed_metrics = cls._extract_metrics_from_analysis(analysis_result)
             logger.info(f"Parsed metrics: {parsed_metrics}")
+            logger.info(f"User type: {'PAID' if is_paid else 'FREE'}")
 
             llm = ChatOpenAI(
                 api_key=settings.OPENAI_API_KEY,
@@ -558,141 +558,267 @@ class AIService:
             prompt_file_path = Path(__file__).parent.parent / "utils" / "prompts.json"
             with open(prompt_file_path, 'r') as file:
                 prompt_data = json.load(file)
-                system_prompt = prompt_data.get('system_prompt', '')
+                
+                # Choose the appropriate prompt based on user type
+                if is_paid:
+                    system_prompt = prompt_data.get('system_prompt_paid', '')
+                    if not system_prompt:
+                        # Fallback to original prompt
+                        system_prompt = prompt_data.get('system_prompt', '')
+                else:
+                    system_prompt = prompt_data.get('system_prompt_free', '')
+                
                 if not system_prompt:
-                    raise ValueError("System prompt not found in JSON file")
-
-            # Enhanced system prompt with specific metric integration
-            enhanced_system_prompt = system_prompt + f"""
-
-            CRITICAL SCORING INSTRUCTIONS:
-            Use these EXACT values from the analysis results:
-            - Primary Genius Factor: {parsed_metrics['primary_genius']} 
-            - Secondary Genius Factor: {parsed_metrics['secondary_genius']}
-            - Confidence Level: {parsed_metrics['confidence_level']}
-            - Current Role Alignment: {parsed_metrics['role_alignment_score']}% ({parsed_metrics['role_alignment_risk']})
-            - Talent-Passion Alignment: {parsed_metrics['talent_passion_alignment']}
-            - Hybrid Classification: {parsed_metrics['hybrid_classification']}
-
-            IMPORTANT: 
-            1. Use the role_alignment_score ({parsed_metrics['role_alignment_score']}%) EXACTLY as provided in current_role_alignment_analysis.alignment_score
-            2. Calculate genius_factor_score based on confidence level: 
-            - High confidence: 80-95
-            - Moderate confidence: 65-80  
-            - Low confidence: 45-65
-            - Very Low confidence: 25-45
-            3. For retention risk assessment, consider role alignment and confidence:
-            - Role alignment <40%: High retention risk (70-90)
-            - Role alignment 40-70%: Moderate retention risk (40-70)
-            - Role alignment >70%: Low retention risk (10-40)
-            4. Mobility scores should reflect realistic opportunities based on genius factors and current role fit"""
+                    raise ValueError(f"System prompt not found in JSON file for {'paid' if is_paid else 'free'} users")
 
             # Initialize Pydantic output parser
             parser = PydanticOutputParser(pydantic_object=IndividualEmployeeReport)
 
-            # Enhanced prompt template with parsed metrics
-            report_prompt = PromptTemplate(
-                template=enhanced_system_prompt + "\n\nAnalysis Data:\n{analysis_data}\n\nParsed Metrics:\n{parsed_metrics}\n\n{format_instructions}\nGenerate the report:",
-                input_variables=["analysis_data", "parsed_metrics"],
-                partial_variables={"format_instructions": parser.get_format_instructions()}
-            )
+            if is_paid:
+                # Enhanced system prompt with specific metric integration for PAID users
+                enhanced_system_prompt = system_prompt + f"""
 
-            # Log the analysis data
-            logger.debug(f"Analysis data: {analysis_result}")
+                CRITICAL SCORING INSTRUCTIONS:
+                Use these EXACT values from the analysis results:
+                - Primary Genius Factor: {parsed_metrics['primary_genius']} 
+                - Secondary Genius Factor: {parsed_metrics['secondary_genius']}
+                - Confidence Level: {parsed_metrics['confidence_level']}
+                - Current Role Alignment: {parsed_metrics['role_alignment_score']}% ({parsed_metrics['role_alignment_risk']})
+                - Talent-Passion Alignment: {parsed_metrics['talent_passion_alignment']}
+                - Hybrid Classification: {parsed_metrics['hybrid_classification']}
 
-            # Render and log the full prompt
-            full_prompt_str = report_prompt.format(
-                analysis_data=analysis_result,
-                parsed_metrics=json.dumps(parsed_metrics, indent=2)
-            )
-            logger.debug(f"Full prompt:\n{full_prompt_str}")
-        
-            chain = report_prompt | llm | parser
-            output = await chain.ainvoke({
-                "analysis_data": analysis_result,
-                "parsed_metrics": json.dumps(parsed_metrics, indent=2)
-            })
-            
-            # Override certain fields with parsed values to ensure accuracy
-            output_dict = output.dict()
-            
-            # Clean confidence level from genius factor names (remove "(Confidence: ...)" patterns)
-            import re
-            if "genius_factor_profile" in output_dict:
-                gfp = output_dict["genius_factor_profile"]
-                if "primary_genius_factor" in gfp:
-                    # Remove confidence level pattern like "(Confidence: Moderate)" or "(Confidence: High)" etc.
-                    cleaned_primary = re.sub(r'\s*\(Confidence:\s*[^)]+\)', '', gfp["primary_genius_factor"]).strip()
-                    output_dict["genius_factor_profile"]["primary_genius_factor"] = cleaned_primary
+                IMPORTANT: 
+                1. Use the role_alignment_score ({parsed_metrics['role_alignment_score']}%) EXACTLY as provided in current_role_alignment_analysis.alignment_score
+                2. Calculate genius_factor_score based on confidence level: 
+                - High confidence: 80-95
+                - Moderate confidence: 65-80  
+                - Low confidence: 45-65
+                - Very Low confidence: 25-45
+                3. For retention risk assessment, consider role alignment and confidence:
+                - Role alignment <40%: High retention risk (70-90)
+                - Role alignment 40-70%: Moderate retention risk (40-70)
+                - Role alignment >70%: Low retention risk (10-40)
+                4. Mobility scores should reflect realistic opportunities based on genius factors and current role fit
+                
+                **PAID USER: Generate FULL detailed report with all sections**
+                """
+                
+                report_prompt = PromptTemplate(
+                    template=enhanced_system_prompt + "\n\nAnalysis Data:\n{analysis_data}\n\nParsed Metrics:\n{parsed_metrics}\n\n{format_instructions}\nGenerate the report:",
+                    input_variables=["analysis_data", "parsed_metrics"],
+                    partial_variables={"format_instructions": parser.get_format_instructions()}
+                )
+                
+                # Generate full report for paid users
+                chain = report_prompt | llm | parser
+                output = await chain.ainvoke({
+                    "analysis_data": analysis_result,
+                    "parsed_metrics": json.dumps(parsed_metrics, indent=2)
+                })
+                
+                # Override certain fields with parsed values to ensure accuracy
+                output_dict = output.dict()
+                
+                # Clean confidence level from genius factor names
+                import re
+                if "genius_factor_profile" in output_dict:
+                    gfp = output_dict["genius_factor_profile"]
+                    if "primary_genius_factor" in gfp:
+                        cleaned_primary = re.sub(r'\s*\(Confidence:\s*[^)]+\)', '', gfp["primary_genius_factor"]).strip()
+                        output_dict["genius_factor_profile"]["primary_genius_factor"] = cleaned_primary
+                        
+                    if "secondary_genius_factor" in gfp and gfp["secondary_genius_factor"]:
+                        cleaned_secondary = re.sub(r'\s*\(Confidence:\s*[^)]+\)', '', gfp["secondary_genius_factor"]).strip()
+                        output_dict["genius_factor_profile"]["secondary_genius_factor"] = cleaned_secondary
+                
+                # Ensure role alignment score matches exactly for paid users
+                if "current_role_alignment_analysis" in output_dict:
+                    output_dict["current_role_alignment_analysis"]["alignment_score"] = str(parsed_metrics["role_alignment_score"])
+                
+                # Calculate realistic genius factor score based on confidence
+                confidence_level = parsed_metrics["confidence_level"].lower()
+                if "high" in confidence_level:
+                    genius_factor_score = 85 + (parsed_metrics["role_alignment_score"] - 50) * 0.2
+                elif "moderate" in confidence_level:
+                    genius_factor_score = 70 + (parsed_metrics["role_alignment_score"] - 50) * 0.15  
+                elif "low" in confidence_level:
+                    genius_factor_score = 55 + (parsed_metrics["role_alignment_score"] - 50) * 0.1
+                else:  # very low
+                    genius_factor_score = 35 + (parsed_metrics["role_alignment_score"] - 50) * 0.05
                     
-                if "secondary_genius_factor" in gfp and gfp["secondary_genius_factor"]:
-                    # Remove confidence level pattern from secondary factor too
-                    cleaned_secondary = re.sub(r'\s*\(Confidence:\s*[^)]+\)', '', gfp["secondary_genius_factor"]).strip()
-                    output_dict["genius_factor_profile"]["secondary_genius_factor"] = cleaned_secondary
-            
-            # Ensure role alignment score matches exactly
-            if "current_role_alignment_analysis" in output_dict:
-                output_dict["current_role_alignment_analysis"]["alignment_score"] = str(parsed_metrics["role_alignment_score"])
-            
-            # Calculate realistic genius factor score based on confidence
-            confidence_level = parsed_metrics["confidence_level"].lower()
-            if "high" in confidence_level:
-                genius_factor_score = 85 + (parsed_metrics["role_alignment_score"] - 50) * 0.2
-            elif "moderate" in confidence_level:
-                genius_factor_score = 70 + (parsed_metrics["role_alignment_score"] - 50) * 0.15  
-            elif "low" in confidence_level:
-                genius_factor_score = 55 + (parsed_metrics["role_alignment_score"] - 50) * 0.1
-            else:  # very low
-                genius_factor_score = 35 + (parsed_metrics["role_alignment_score"] - 50) * 0.05
+                output_dict["genius_factor_score"] = max(25, min(95, int(genius_factor_score)))
                 
-            output_dict["genius_factor_score"] = max(25, min(95, int(genius_factor_score)))
-            
-            risk_analysis = await cls._perform_risk_analysis(output_dict, all_answers)
-            
-            # Override risk analysis scores with more realistic values based on parsed metrics
-            if parsed_metrics["role_alignment_score"] < 40:
-                risk_analysis["scores"]["retention_risk_score"] = min(90, int(70 + (40 - parsed_metrics["role_alignment_score"])))
-            elif parsed_metrics["role_alignment_score"] < 70:
-                risk_analysis["scores"]["retention_risk_score"] = int(40 + (70 - parsed_metrics["role_alignment_score"]) * 0.5)
+                # Perform risk analysis for paid users
+                risk_analysis = await cls._perform_risk_analysis(output_dict, all_answers)
+                
+                # Override risk analysis scores with more realistic values based on parsed metrics
+                if parsed_metrics["role_alignment_score"] < 40:
+                    risk_analysis["scores"]["retention_risk_score"] = min(90, int(70 + (40 - parsed_metrics["role_alignment_score"])))
+                elif parsed_metrics["role_alignment_score"] < 70:
+                    risk_analysis["scores"]["retention_risk_score"] = int(40 + (70 - parsed_metrics["role_alignment_score"]) * 0.5)
+                else:
+                    risk_analysis["scores"]["retention_risk_score"] = max(10, int(40 - (parsed_metrics["role_alignment_score"] - 70) * 0.8))
+                    
+                # Set retention risk level
+                retention_risk_score = risk_analysis["scores"]["retention_risk_score"]
+                if retention_risk_score <= 30:
+                    risk_category = "Low"
+                elif retention_risk_score <= 60:
+                    risk_category = "Medium"  
+                else:
+                    risk_category = "High"
+                    
+                if "current_role_alignment_analysis" in output_dict:
+                    output_dict["current_role_alignment_analysis"]["retention_risk_level"] = f"{risk_category}"
+                    
+                # Adjust genius factor score in risk analysis
+                base_genius_score = output_dict["genius_factor_score"]
+                risk_analysis["scores"]["genius_factor_score"] = max(25, min(95, base_genius_score))
+                
+                # Mobility score based on genius factor strength and role alignment
+                if parsed_metrics["role_alignment_score"] > 70:
+                    mobility_score = 40 + (parsed_metrics["role_alignment_score"] - 70) * 0.5
+                else:
+                    mobility_score = 60 + (70 - parsed_metrics["role_alignment_score"]) * 0.4
+                    
+                risk_analysis["scores"]["mobility_opportunity_score"] = max(30, min(90, int(mobility_score)))
+                
+                logger.info(f"Final scores for PAID user: genius_factor={output_dict['genius_factor_score']}, retention_risk={risk_analysis['scores']['retention_risk_score']}, mobility={risk_analysis['scores']['mobility_opportunity_score']}")
+                
+                return {
+                    "status": "success",
+                    "report": output_dict,
+                    "risk_analysis": risk_analysis,
+                    "user_type": "paid"
+                }
+                
             else:
-                risk_analysis["scores"]["retention_risk_score"] = max(10, int(40 - (parsed_metrics["role_alignment_score"] - 70) * 0.8))
+                # For FREE users, generate limited report using the free prompt
+                # Create a simpler prompt that's more likely to return valid JSON
+                free_prompt_template = f"""{system_prompt}
+
+    Analysis Data:
+    {analysis_result[:1000]}
+
+    Parsed Metrics:
+    - Primary Genius Factor: {parsed_metrics['primary_genius']}
+    - Secondary Genius Factor: {parsed_metrics['secondary_genius']}
+    - Confidence Level: {parsed_metrics['confidence_level']}
+    - Current Role Alignment: {parsed_metrics['role_alignment_score']}%
+
+    Generate a JSON response with ONLY these keys:
+    1. executive_summary (100-150 words max)
+    2. genius_factor_profile (with primary_genius_factor, secondary_genius_factor, key_strengths, weaknesses, energy_sources)
+    3. data_sources_and_methodology (simple statement)
+    4. genius_factor_score (0-100)
+
+    IMPORTANT: Return ONLY valid JSON. Do not include any other text.
+    """
                 
-            # Now set retention risk level using the calculated retention risk score and proper risk categorization
-            retention_risk_score = risk_analysis["scores"]["retention_risk_score"]
-            if retention_risk_score <= 30:
-                risk_category = "Low"
-            elif retention_risk_score <= 60:
-                risk_category = "Medium"  
-            else:
-                risk_category = "High"
-                
-            if "current_role_alignment_analysis" in output_dict:
-                output_dict["current_role_alignment_analysis"]["retention_risk_level"] = f"{risk_category}"
-                
-            # Adjust genius factor score in risk analysis based on confidence and alignment
-            base_genius_score = output_dict["genius_factor_score"]
-            risk_analysis["scores"]["genius_factor_score"] = max(25, min(95, base_genius_score))
-            
-            # Mobility score based on genius factor strength and role alignment
-            if parsed_metrics["role_alignment_score"] > 70:
-                mobility_score = 40 + (parsed_metrics["role_alignment_score"] - 70) * 0.5  # Lower mobility need when well-aligned
-            else:
-                mobility_score = 60 + (70 - parsed_metrics["role_alignment_score"]) * 0.4   # Higher mobility opportunity when misaligned
-                
-            risk_analysis["scores"]["mobility_opportunity_score"] = max(30, min(90, int(mobility_score)))
-            
-            logger.info(f"Final scores: genius_factor={output_dict['genius_factor_score']}, retention_risk={risk_analysis['scores']['retention_risk_score']}, mobility={risk_analysis['scores']['mobility_opportunity_score']}")
-         
-            return {
-                "status": "success",
-                "report": output_dict,
-                "risk_analysis": risk_analysis
-            }
+                # Use LLM to generate limited JSON response
+                try:
+                    response = await llm.ainvoke(free_prompt_template, response_format={"type": "json_object"})
+                    logger.debug(f"Free user LLM response: {response.content[:500]}")
+                    
+                    # Try to parse the JSON response
+                    content = response.content.strip()
+                    
+                    # Clean the response - remove any markdown code blocks
+                    if content.startswith("```json"):
+                        content = content[7:]
+                    if content.endswith("```"):
+                        content = content[:-3]
+                    if content.startswith("```"):
+                        content = content[3:]
+                    
+                    content = content.strip()
+                    
+                    limited_report = json.loads(content)
+                    
+                    # Create a complete report structure with "Not Specified" for paid-only sections
+                    final_report = {
+                        "executive_summary": limited_report.get("executive_summary", f"Based on your Genius Factor assessment, your primary genius factor is {parsed_metrics['primary_genius']}. Upgrade to paid plan for detailed career insights."),
+                        "genius_factor_profile": limited_report.get("genius_factor_profile", {
+                            "primary_genius_factor": parsed_metrics["primary_genius"],
+                            "secondary_genius_factor": parsed_metrics["secondary_genius"],
+                            "key_strengths": ["Analytical thinking", "Problem solving", "Attention to detail"],
+                            "weaknesses": ["May overlook big picture", "Can be overly critical"],
+                            "energy_sources": ["Solving complex problems", "Data analysis", "Learning new technologies"]
+                        }),
+                        "current_role_alignment_analysis": {"alignment_score": "Not Specified", "retention_risk_level": "Not Specified"},
+                        "internal_career_opportunities": {"summary": "Not Specified"},
+                        "retention_and_mobility_strategies": {"summary": "Not Specified"},
+                        "development_action_plan": {"summary": "Not Specified"},
+                        "personalized_resources": {"summary": "Not Specified"},
+                        "data_sources_and_methodology": limited_report.get("data_sources_and_methodology", "Analysis based on Genius Factor assessment methodology"),
+                        "genius_factor_score": limited_report.get("genius_factor_score", 65)
+                    }
+                    
+                    logger.info(f"Generated LIMITED report for FREE user: genius_factor_score={final_report['genius_factor_score']}")
+                    
+                    return {
+                        "status": "success",
+                        "report": final_report,
+                        "risk_analysis": None,  # No risk analysis for free users
+                        "user_type": "free"
+                    }
+                    
+                except json.JSONDecodeError as e:
+                    logger.error(f"Failed to parse free user report: {e}")
+                    logger.error(f"Raw content that failed: {content[:500] if 'content' in locals() else 'No content'}")
+                    # Return a hardcoded minimal report for free users
+                    return {
+                        "status": "success",
+                        "report": {
+                            "executive_summary": f"Based on your Genius Factor assessment, your primary genius factor is {parsed_metrics['primary_genius']} with secondary factor {parsed_metrics['secondary_genius']}. This report provides basic insights into your talent profile. Upgrade to paid plan for detailed career recommendations, job suggestions, and personalized development plans.",
+                            "genius_factor_profile": {
+                                "primary_genius_factor": parsed_metrics["primary_genius"],
+                                "secondary_genius_factor": parsed_metrics["secondary_genius"],
+                                "key_strengths": ["Analytical thinking", "Problem solving", "Attention to detail"],
+                                "weaknesses": ["May overlook big picture", "Can be overly critical"],
+                                "energy_sources": ["Solving complex problems", "Data analysis", "Learning new technologies"]
+                            },
+                            "current_role_alignment_analysis": {"alignment_score": "Not Specified", "retention_risk_level": "Not Specified"},
+                            "internal_career_opportunities": {"summary": "Not Specified"},
+                            "retention_and_mobility_strategies": {"summary": "Not Specified"},
+                            "development_action_plan": {"summary": "Not Specified"},
+                            "personalized_resources": {"summary": "Not Specified"},
+                            "data_sources_and_methodology": "Analysis based on Genius Factor assessment methodology. Detailed scoring algorithms available in paid version.",
+                            "genius_factor_score": 65
+                        },
+                        "risk_analysis": None,
+                        "user_type": "free"
+                    }
+                except Exception as e:
+                    logger.error(f"Error generating free user report: {str(e)}")
+                    # Return a hardcoded minimal report for free users
+                    return {
+                        "status": "success",
+                        "report": {
+                            "executive_summary": f"Based on your Genius Factor assessment, your primary genius factor is {parsed_metrics['primary_genius']}. Upgrade to paid plan for detailed career insights and personalized recommendations.",
+                            "genius_factor_profile": {
+                                "primary_genius_factor": parsed_metrics["primary_genius"],
+                                "secondary_genius_factor": parsed_metrics["secondary_genius"],
+                                "key_strengths": ["Analytical thinking", "Problem solving", "Attention to detail"],
+                                "weaknesses": ["May overlook big picture", "Can be overly critical"],
+                                "energy_sources": ["Solving complex problems", "Data analysis", "Learning new technologies"]
+                            },
+                            "current_role_alignment_analysis": {"alignment_score": "Not Specified", "retention_risk_level": "Not Specified"},
+                            "internal_career_opportunities": {"summary": "Not Specified"},
+                            "retention_and_mobility_strategies": {"summary": "Not Specified"},
+                            "development_action_plan": {"summary": "Not Specified"},
+                            "personalized_resources": {"summary": "Not Specified"},
+                            "data_sources_and_methodology": "Analysis based on Genius Factor assessment methodology",
+                            "genius_factor_score": 65
+                        },
+                        "risk_analysis": None,
+                        "user_type": "free"
+                    }
 
         except Exception as e:
             logger.error(f"Error in generate_career_recommendation: {str(e)}")
             return {"status": "error", "error": str(e)}
-    
+   
     @classmethod
     
         

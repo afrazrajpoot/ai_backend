@@ -173,7 +173,6 @@ class AssessmentController:
                 except Exception as close_error:
                     logger.error(f"❌ Error closing database connection: {str(close_error)}")
                 
-
     @staticmethod
     async def analyze_assessment(input_data: AssessmentData) -> Dict[str, Any]:
         """
@@ -181,6 +180,10 @@ class AssessmentController:
         genius detection and real-time notifications
         """
         try:
+            # Extract is_paid from input_data
+            is_paid = input_data.is_paid if hasattr(input_data, 'is_paid') else False
+            logger.info(f"User {input_data.userId} is_paid status: {is_paid}")
+            
             # === fetch department ===
             db_params = {
                 "user": "postgres", "password": "root",
@@ -254,8 +257,6 @@ class AssessmentController:
                 # Continue without deep results
                 deep_results = {"error": f"Deep analysis failed: {str(e)}"}
 
-            # === 4. Send notification success (optional) ===
-           
             # === 4. RAG step with improved inputs ===
             try:
                 rag_results = await ai_service.analyze_majority_answers(basic_results, deep_results)
@@ -266,7 +267,11 @@ class AssessmentController:
 
             # === 5. Generate professional career recommendation report ===
             try:
-                recommendations = await ai_service.generate_career_recommendation(rag_results, input_dict.get('allAnswers', []))
+                recommendations = await ai_service.generate_career_recommendation(
+                    rag_results, 
+                    input_dict.get('allAnswers', []),
+                    is_paid=is_paid  # Pass the is_paid parameter
+                )
             except Exception as e:
                 logger.error(f"Failed to generate recommendations: {str(e)}")
                 await NotificationService.send_user_notification(
@@ -305,6 +310,7 @@ class AssessmentController:
                 "departement": input_dict['departement'],
                 "userId": input_dict['userId'],
                 "report": recommendations.get("report"),
+                "user_type": recommendations.get("user_type", "free"),  # Add user type to response
                 "risk_analysis": recommendations.get("risk_analysis"),
                 "metadata": recommendations.get("metadata")
             }
@@ -326,6 +332,7 @@ class AssessmentController:
                     'employeeEmail': input_dict['employeeEmail'],
                     'progress': 100,
                     'status': 'unread',
+                    'user_type': 'paid' if is_paid else 'free'
                 }
             )
 

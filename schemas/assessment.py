@@ -50,3 +50,4 @@ class AssessmentData(BaseModel):
     departement: str
     employeeName: str
     employeeEmail: str
+    is_paid: bool

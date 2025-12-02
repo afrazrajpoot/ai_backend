@@ -7,7 +7,6 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-
 model User {
   id            String      @id @default(uuid())
   firstName     String?
@@ -16,13 +15,25 @@ model User {
   email         String?     @unique
   password      String?
   role          String?
+  paid          Boolean     @default(false)
+  amount        Float?      @default(0.0)
+  quota         Float?      @default(0.0)
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
   emailVerified DateTime?
   image         String?
-  position      String[] 
+  position      String[]
+  
+  // FastAPI authentication
+  fastApiToken      String?
+  fastApiTokenExpiry DateTime?
+  
+  // Auth fields
+  verificationToken String?
+  resetToken       String?
+  resetTokenExpiry DateTime?
 
-  department    String[]    // 👈 now it's an array of strings
+  department    String[]
   hrId          String?
   salary        String?
   accounts      Account[]
@@ -34,10 +45,23 @@ model User {
   jobs          Job[]       @relation("RecruiterJobs")
 
   // Applications submitted by this user (Candidate/Employee)
-  applications  Application[] 
+  applications  Application[]
 
   // Denormalized array of applied job IDs for employees
   appliedJobIds String[]
+  
+  @@map("users")
+}
+// Optional: Store FastAPI sessions separately
+model FastAPISession {
+  id        String   @id @default(uuid())
+  user_id   String
+  email     String
+  token     String
+  expires_at DateTime
+  created_at DateTime @default(now())
+  
+  @@unique([user_id])
 }
 model Department {
   id      String   @id @default(uuid())
@@ -45,7 +69,7 @@ model Department {
 
   hrId     String
 userId      String
-  ingoing   Json[]
+ ingoing   Json[]
   outgoing  Json[]
   promotion String?
   transfer  String?
@@ -134,7 +158,7 @@ model IndividualEmployeeReport {
   developmentActionPlanJson          Json
   personalizedResourcesJson          Json
   dataSourcesAndMethodologyJson      Json
-  risk_analysis                      Json
+   risk_analysis                     Json
 }
 
 model Job {
@@ -157,9 +181,6 @@ model Job {
   applications   Application[]
   
 }
-
-
-
 model Application {
   id          String   @id @default(uuid())
   createdAt   DateTime @default(now())
@@ -182,6 +203,17 @@ model AiCareerRecommendation {
   careerRecommendation  String
 }
 
+model Notification{
+    id             String      @id @default(uuid())
+    message        String
+    hrId           String
+    employeeName   String
+    employeeEmail  String
+    employeeId     String
+    status         String
+   createdAt                         DateTime @default(now())
+  updatedAt                         DateTime @updatedAt
+}
 
 enum JobType {
   FULL_TIME
@@ -204,19 +236,6 @@ enum UserRole {
 }
 
 
-model Notification{
-    id             String      @id @default(uuid())
-    message        String
-    hrId           String
-    employeeName   String
-    employeeEmail  String
-    employeeId     String
-    status         String
-   createdAt                         DateTime @default(now())
-  updatedAt                         DateTime @updatedAt
-}
-
-
 model ChatConversation {
   id           String   @id @default(cuid())
   hr_id        String
@@ -227,6 +246,19 @@ model ChatConversation {
 
   @@unique([hr_id, department])
   @@map("chat_conversations")
+}
+
+model AnalysisResult {
+  id              Int      @id @default(autoincrement())
+  hrid            String   @db.VarChar(50)
+  department_name String   @db.VarChar(255)
+  ai_response     Json
+  risk_score      Float?
+  created_at      DateTime @default(now())
+
+  @@index([hrid])
+  @@index([department_name])
+  @@index([created_at])
 }
 
 
