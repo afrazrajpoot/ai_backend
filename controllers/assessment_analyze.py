@@ -1,14 +1,13 @@
 from prisma import Prisma
 from utils.logger import logger
-import json, asyncpg
+import json
+import asyncpg
 from schemas.assessment import AssessmentData, AssessmentPart
 from services.ai_service import AIService
 # from services.database_notification_service import DatabaseNotificationService
 from services.db_service import DBService
 from utils.analyze_assessment import analyze_assessment_data
-from utils.logger import logger
 from utils.analysis_utils import analyze_full_from_parts, categorize_part_name
-from utils.logger import logger
 from services.notification_service import NotificationService
 from typing import Dict, Any
 import httpx
@@ -21,7 +20,6 @@ ai_service = AIService()
 db_notification_service = DBService()
 
 
-
 class AssessmentController:
     
     @staticmethod
@@ -30,16 +28,8 @@ class AssessmentController:
         Minimal version: saves hardcoded data using raw PostgreSQL (asyncpg).
         """
 
-        
-
         conn = None
         try:
-         
-            # Validate JSON data before saving
-            json_test = json.dumps(input_data)
-
-       
-        
             # Connection parameters
             db_params = {
                 "user": "postgres",
@@ -48,39 +38,30 @@ class AssessmentController:
                 "host": "localhost",
                 "port": 5432
             }
-  
 
             # Connect to database
             conn = await asyncpg.connect(**db_params)
 
-
             # Test connection with simple query
             test_result = await conn.fetchval("SELECT 1")
-         
 
-          
             table_check = await conn.fetchval("""
                 SELECT EXISTS (
                     SELECT FROM information_schema.tables 
                     WHERE table_name = 'IndividualEmployeeReport'
                 );
             """)
-       
 
             if not table_check:
-      
                 return {"status": "error", "message": "Table 'IndividualEmployeeReport' does not exist"}
 
-            # Get table structure
+            # Get table structure (optional, for debugging)
             columns = await conn.fetch("""
                 SELECT column_name, data_type, is_nullable
                 FROM information_schema.columns
                 WHERE table_name = 'IndividualEmployeeReport'
                 ORDER BY ordinal_position;
             """)
-            
-      
-       
 
             # Prepare INSERT query with better formatting
             query = """
@@ -110,9 +91,6 @@ class AssessmentController:
                 RETURNING id, "createdAt", "updatedAt"
             """
 
-            
-          
-
             # Execute the query
             result = await conn.fetchrow(
                 query,
@@ -132,15 +110,11 @@ class AssessmentController:
             )
 
             if result:
-              
-                
                 # Verify the record was saved by reading it back
                 verify_record = await conn.fetchrow(
                     'SELECT id, "userId", "createdAt" FROM "IndividualEmployeeReport" WHERE id = $1',
                     result['id']
                 )
-                
-          
 
                 return {
                     "status": "success", 
@@ -148,28 +122,26 @@ class AssessmentController:
                     "created_at": result['createdAt'].isoformat() if result['createdAt'] else None
                 }
             else:
-             
                 return {"status": "error", "message": "No result returned from INSERT query"}
 
         except asyncpg.PostgresError as db_error:
-          
+            logger.error(f"Database error: {str(db_error)}")
             return {"status": "error", "message": f"Database error: {str(db_error)}"}
 
         except (TypeError, ValueError) as json_error:
-         
+            logger.error(f"JSON encoding error: {str(json_error)}")
             return {"status": "error", "message": f"JSON encoding error: {str(json_error)}"}
 
         except Exception as e:
-        
+            logger.error(f"Unexpected error in save_to_db: {str(e)}")
             import traceback
-     
+            logger.error(traceback.format_exc())
             return {"status": "error", "message": f"Unexpected error: {str(e)}"}
 
         finally:
             if conn:
                 try:
                     await conn.close()
-                 
                 except Exception as close_error:
                     logger.error(f"❌ Error closing database connection: {str(close_error)}")
                 
@@ -191,7 +163,7 @@ class AssessmentController:
             }
             conn = await asyncpg.connect(**db_params)
             departement = await conn.fetchval(
-                'SELECT "department"[array_length("department", 1)] FROM "User" WHERE id = $1',
+                'SELECT "department"[array_length("department", 1)] FROM "users" WHERE id = $1',
                 input_data.userId
             )
             await conn.close()
@@ -260,7 +232,7 @@ class AssessmentController:
             # === 4. RAG step with improved inputs ===
             try:
                 rag_results = await ai_service.analyze_majority_answers(basic_results, deep_results)
-                print(f'RAG results: {rag_results}')
+                logger.info(f'RAG results: {rag_results}')
             except Exception as e:
                 logger.exception("RAG analysis failed")
                 rag_results = f"RAG analysis failed: {str(e)}"
@@ -270,7 +242,6 @@ class AssessmentController:
                 recommendations = await ai_service.generate_career_recommendation(
                     rag_results, 
                     input_dict.get('allAnswers', []),
-                    is_paid=is_paid  # Pass the is_paid parameter
                 )
             except Exception as e:
                 logger.error(f"Failed to generate recommendations: {str(e)}")
@@ -303,9 +274,10 @@ class AssessmentController:
                 
                 raise HTTPException(status_code=500, detail="Failed to generate career recommendations")
 
-            # Prepare final result
+            # Prepare final result - Include basic_results as 'data' for frontend compatibility (array format)
             final_result = {
-                "status": "success",
+                "success": True,
+                "data": basic_results,  # This is the array of AssessmentAnalysisResult expected by frontend
                 "hrId": input_dict['hrId'],
                 "departement": input_dict['departement'],
                 "userId": input_dict['userId'],
@@ -339,25 +311,29 @@ class AssessmentController:
             # Save notification to database using DatabaseNotificationService
             try:
                 await db_notification_service.save_notification(notification_data)
-                
             except Exception as e:
                 logger.error(f"Error saving notification: {str(e)}")
-                return
                 # Continue even if notification save fails
+
+            return final_result  # Explicitly return the final_result
 
         except Exception as e:
             logger.error(f"Error in analyze_assessment: {str(e)}")
             
-            # Use input_dict for consistent access to user data
-            await NotificationService.send_user_notification(
-                input_dict['userId'],
-                input_dict['hrId'],
-                {
-                    'message': 'Assessment analysis failed',
-                    'progress': 100,
-                    'status': 'error',
-                    'error': str(e)
-                }
-            )
+            # Get userId and hrId safely
+            user_id = getattr(input_data, 'userId', None)
+            hr_id = getattr(input_data, 'hrId', None)
+            
+            if user_id and hr_id:
+                await NotificationService.send_user_notification(
+                    user_id,
+                    hr_id,
+                    {
+                        'message': 'Assessment analysis failed',
+                        'progress': 100,
+                        'status': 'error',
+                        'error': str(e)
+                    }
+                )
             
             raise HTTPException(status_code=500, detail=str(e))

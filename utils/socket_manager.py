@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 import json
 import math, numpy as np, pandas as pd
 from json import dumps
-
+import uuid
 def safe_serialize(obj):
     # ----- scalars ------------------------------------------------
     if isinstance(obj, (np.integer,)):
@@ -503,6 +503,7 @@ async def internal_mobility(sid, data):
             await prisma.disconnect()
 
 
+import uuid  # Ensure this is imported at the top of the file if not already
 
 @sio.event
 async def admin_dashboard(sid, data):
@@ -525,19 +526,30 @@ async def admin_dashboard(sid, data):
         # Get all departments for mobility data
         departments = await prisma.department.find_many()
 
-        # Get all HR users to map hrId to names
-        unique_hr_ids = list(set([report.hrId for report in reports if report.hrId]))
+        # Get unique potential HR IDs from reports and validate UUIDs
+        unique_hr_candidates = list(set([report.hrId for report in reports if report.hrId]))
+        valid_hr_ids = []
+        for hr_candidate in unique_hr_candidates:
+            try:
+                hr_id_str = str(hr_candidate)
+                parsed_uuid = uuid.UUID(hr_id_str)
+                valid_hr_ids.append(hr_id_str)
+            except (ValueError, AttributeError):
+                # Not a valid UUID, skip it
+                continue
+
+        # Get HR users only for valid UUID IDs
         hr_users = []
-        if unique_hr_ids:
+        if valid_hr_ids:
             hr_users = await prisma.user.find_many(
                 where={
                     'id': {
-                        'in': unique_hr_ids
+                        'in': valid_hr_ids
                     }
                 }
             )
         
-        # Create HR ID to name mapping
+        # Create HR ID to name mapping (only for valid HRs)
         hr_name_mapping = {}
         for user in hr_users:
             hr_name_mapping[user.id] = {
@@ -550,16 +562,26 @@ async def admin_dashboard(sid, data):
             await sio.emit('reports_info', {'error': 'No reports found'}, to=sid)
             return
 
-        # Get all unique employee IDs from reports
+        # Get all unique employee IDs from reports (similar validation if needed)
         unique_employee_ids = list(set([report.userId for report in reports if report.userId]))
+        
+        # Validate employee IDs as UUIDs (optional, but consistent)
+        valid_employee_ids = []
+        for emp_id in unique_employee_ids:
+            try:
+                emp_id_str = str(emp_id)
+                uuid.UUID(emp_id_str)
+                valid_employee_ids.append(emp_id_str)
+            except (ValueError, AttributeError):
+                continue
         
         # Get all employee users to map employeeId to names
         employee_users = []
-        if unique_employee_ids:
+        if valid_employee_ids:
             employee_users = await prisma.user.find_many(
                 where={
                     'id': {
-                        'in': unique_employee_ids
+                        'in': valid_employee_ids
                     }
                 }
             )
@@ -573,7 +595,7 @@ async def admin_dashboard(sid, data):
                 'fullName': f"{user.firstName or ''} {user.lastName or ''}".strip() or 'Unknown Employee'
             }
 
-        # Process reports data (UPDATED TO INCLUDE EMPLOYEE NAMES)
+        # Process reports data (UPDATED TO INCLUDE EMPLOYEE NAMES AND VALIDATE HR IDs)
         reports_data = []
         employee_risk_details = []
         
@@ -596,26 +618,44 @@ async def admin_dashboard(sid, data):
             elif retention_risk_score > 60:
                 risk_category = "High"
             
+            # Validate and get HR ID string
+            hr_id_str = 'Unknown HR'
+            if report.hrId:
+                try:
+                    hr_id_str = str(report.hrId)
+                    uuid.UUID(hr_id_str)
+                except (ValueError, AttributeError):
+                    hr_id_str = 'Unknown HR'
+            
             # Get HR name from mapping
-            hr_info = hr_name_mapping.get(report.hrId, {
+            hr_info = hr_name_mapping.get(hr_id_str, {
                 'firstName': '',
                 'lastName': '',
                 'fullName': 'Unknown HR'
             })
             
+            # Validate and get Employee ID string (similar logic)
+            employee_id_str = 'Unknown Employee'
+            if report.userId:
+                try:
+                    employee_id_str = str(report.userId)
+                    uuid.UUID(employee_id_str)
+                except (ValueError, AttributeError):
+                    employee_id_str = 'Unknown Employee'
+            
             # Get Employee name from mapping
-            employee_info = employee_name_mapping.get(report.userId, {
+            employee_info = employee_name_mapping.get(employee_id_str, {
                 'firstName': '',
                 'lastName': '',
                 'fullName': 'Unknown Employee'
             })
             
             reports_data.append({
-                'hr_id': str(report.hrId or 'Unknown HR'),
+                'hr_id': hr_id_str,
                 'hr_first_name': hr_info['firstName'],
                 'hr_last_name': hr_info['lastName'],
                 'hr_full_name': hr_info['fullName'],
-                'employee_id': str(report.userId or 'Unknown Employee'),
+                'employee_id': employee_id_str,
                 'employee_first_name': employee_info['firstName'],  # NEW
                 'employee_last_name': employee_info['lastName'],    # NEW
                 'employee_full_name': employee_info['fullName'],    # NEW
@@ -628,11 +668,11 @@ async def admin_dashboard(sid, data):
             })
             
             employee_risk_details.append({
-                'employee_id': str(report.userId or 'Unknown Employee'),
+                'employee_id': employee_id_str,
                 'employee_first_name': employee_info['firstName'],  # NEW
                 'employee_last_name': employee_info['lastName'],    # NEW
                 'employee_full_name': employee_info['fullName'],    # NEW
-                'hr_id': str(report.hrId or 'Unknown HR'),
+                'hr_id': hr_id_str,
                 'hr_first_name': hr_info['firstName'],
                 'hr_last_name': hr_info['lastName'],
                 'hr_full_name': hr_info['fullName'],
@@ -649,12 +689,14 @@ async def admin_dashboard(sid, data):
 
         df = pd.DataFrame(reports_data)
 
-        # Calculate basic statistics (UPDATED TO INCLUDE EMPLOYEE NAMES)
+        # Calculate basic statistics (UPDATED TO INCLUDE ONLY VALID HRs)
         total_reports = len(reports)
-        unique_hr_ids = df['hr_id'].unique()
+        all_unique_hr_ids = df['hr_id'].unique()
+        unique_hr_ids = [hr for hr in all_unique_hr_ids if hr != 'Unknown HR']  # Only real valid UUID HRs
+        total_hr_ids = len(unique_hr_ids)
         unique_departments = df['department'].unique()
 
-        # HR Statistics (UPDATED TO INCLUDE EMPLOYEE NAMES)
+        # HR Statistics (UPDATED TO INCLUDE ONLY VALID HRs AND EMPLOYEE NAMES)
         hr_stats = {}
         for hr_id in unique_hr_ids:
             hr_reports = df[df['hr_id'] == hr_id]
@@ -664,7 +706,7 @@ async def admin_dashboard(sid, data):
                 'fullName': 'Unknown HR'
             })
             
-            hr_stats[str(hr_id)] = {
+            hr_stats[hr_id] = {
                 'first_name': hr_name_info['firstName'],
                 'last_name': hr_name_info['lastName'],
                 'full_name': hr_name_info['fullName'],
@@ -705,9 +747,9 @@ async def admin_dashboard(sid, data):
             month = current_date - relativedelta(months=i)
             last_6_months.append(month.strftime('%Y-%m'))
         
-        # Initialize mobility data structures
+        # Initialize mobility data structures (only for valid HRs)
         mobility_trends = {}
-        hr_mobility_trends = {str(hr_id): {} for hr_id in unique_hr_ids}
+        hr_mobility_trends = {hr_id: {} for hr_id in unique_hr_ids}
         department_mobility_trends = {str(dept): {} for dept in unique_departments}
         
         # Initialize all months with zero values
@@ -719,7 +761,7 @@ async def admin_dashboard(sid, data):
                 'transfers': 0
             }
             for hr_id in unique_hr_ids:
-                hr_mobility_trends[str(hr_id)][month] = {
+                hr_mobility_trends[hr_id][month] = {
                     'ingoing': 0,
                     'outgoing': 0,
                     'promotions': 0,
@@ -733,7 +775,7 @@ async def admin_dashboard(sid, data):
                     'transfers': 0
                 }
         
-        # Process department mobility data
+        # Process department mobility data (only update for valid HRs)
         for dept in departments:
             if not dept.createdAt:
                 continue
@@ -754,25 +796,33 @@ async def admin_dashboard(sid, data):
             if dept.transfer:
                 mobility_trends[dept_month]['transfers'] += 1
             
-            # Update HR-specific mobility data
-            if dept.hrId and str(dept.hrId) in hr_mobility_trends:
-                hr_mobility_trends[str(dept.hrId)][dept_month]['ingoing'] += ingoing_count
-                hr_mobility_trends[str(dept.hrId)][dept_month]['outgoing'] += outgoing_count
-                if dept.promotion:
-                    hr_mobility_trends[str(dept.hrId)][dept_month]['promotions'] += 1
-                if dept.transfer:
-                    hr_mobility_trends[str(dept.hrId)][dept_month]['transfers'] += 1
+            # Update HR-specific mobility data (only if valid HR ID)
+            if dept.hrId:
+                try:
+                    hr_id_str = str(dept.hrId)
+                    uuid.UUID(hr_id_str)
+                    if hr_id_str in hr_mobility_trends:
+                        hr_mobility_trends[hr_id_str][dept_month]['ingoing'] += ingoing_count
+                        hr_mobility_trends[hr_id_str][dept_month]['outgoing'] += outgoing_count
+                        if dept.promotion:
+                            hr_mobility_trends[hr_id_str][dept_month]['promotions'] += 1
+                        if dept.transfer:
+                            hr_mobility_trends[hr_id_str][dept_month]['transfers'] += 1
+                except (ValueError, AttributeError):
+                    pass  # Skip invalid HR ID
             
             # Update department-specific mobility data
-            if dept.name and str(dept.name) in department_mobility_trends:
-                department_mobility_trends[str(dept.name)][dept_month]['ingoing'] += ingoing_count
-                department_mobility_trends[str(dept.name)][dept_month]['outgoing'] += outgoing_count
-                if dept.promotion:
-                    department_mobility_trends[str(dept.name)][dept_month]['promotions'] += 1
-                if dept.transfer:
-                    department_mobility_trends[str(dept.name)][dept_month]['transfers'] += 1
+            if dept.name:
+                dept_name_str = str(dept.name)
+                if dept_name_str in department_mobility_trends:
+                    department_mobility_trends[dept_name_str][dept_month]['ingoing'] += ingoing_count
+                    department_mobility_trends[dept_name_str][dept_month]['outgoing'] += outgoing_count
+                    if dept.promotion:
+                        department_mobility_trends[dept_name_str][dept_month]['promotions'] += 1
+                    if dept.transfer:
+                        department_mobility_trends[dept_name_str][dept_month]['transfers'] += 1
 
-        # Enhanced Risk Analysis by HR (UPDATED TO INCLUDE EMPLOYEE NAMES)
+        # Enhanced Risk Analysis by HR (UPDATED TO INCLUDE ONLY VALID HRs AND EMPLOYEE NAMES)
         risk_analysis_by_hr = {}
         for hr_id in unique_hr_ids:
             hr_reports = df[df['hr_id'] == hr_id]
@@ -827,7 +877,7 @@ async def admin_dashboard(sid, data):
                     }
                 }
             
-            risk_analysis_by_hr[str(hr_id)] = {
+            risk_analysis_by_hr[hr_id] = {
                 'first_name': hr_name_info['firstName'],
                 'last_name': hr_name_info['lastName'],
                 'full_name': hr_name_info['fullName'],
@@ -845,7 +895,7 @@ async def admin_dashboard(sid, data):
         overall_avg_mobility = round(df['mobility_opportunity_score'].mean(), 1) if not df.empty else 0
         overall_avg_genius = round(df['genius_factor_score'].mean(), 1) if not df.empty else 0
 
-        # Prepare chart data for department-specific HR analysis (UPDATED TO INCLUDE EMPLOYEE NAMES)
+        # Prepare chart data for department-specific HR analysis (UPDATED TO INCLUDE ONLY VALID HRs AND EMPLOYEE NAMES)
         hr_dept_chart_data = {}
         for hr_id in unique_hr_ids:
             hr_name_info = hr_name_mapping.get(hr_id, {
@@ -854,31 +904,31 @@ async def admin_dashboard(sid, data):
                 'fullName': 'Unknown HR'
             })
             
-            hr_dept_chart_data[str(hr_id)] = {
+            hr_dept_chart_data[hr_id] = {
                 'first_name': hr_name_info['firstName'],
                 'last_name': hr_name_info['lastName'],
                 'full_name': hr_name_info['fullName'],
                 'departments': {},
-                'risk_distribution': risk_analysis_by_hr[str(hr_id)]['risk_distribution'],
-                'monthly_trend': risk_analysis_by_hr[str(hr_id)]['monthly_trend']
+                'risk_distribution': risk_analysis_by_hr[hr_id]['risk_distribution'],
+                'monthly_trend': risk_analysis_by_hr[hr_id]['monthly_trend']
             }
-            for dept in risk_analysis_by_hr[str(hr_id)]['department_distribution']:
-                hr_dept_chart_data[str(hr_id)]['departments'][str(dept)] = {
-                    'avg_retention_risk': risk_analysis_by_hr[str(hr_id)]['department_distribution'][dept]['avg_retention_risk'],
-                    'avg_mobility_score': risk_analysis_by_hr[str(hr_id)]['department_distribution'][dept]['avg_mobility_score'],
-                    'avg_genius_factor': risk_analysis_by_hr[str(hr_id)]['department_distribution'][dept]['avg_genius_factor'],
-                    'risk_distribution': risk_analysis_by_hr[str(hr_id)]['department_distribution'][dept]['risk_distribution'],
-                    'genius_factor_distribution': risk_analysis_by_hr[str(hr_id)]['department_distribution'][dept]['genius_factor_distribution'],
+            for dept in risk_analysis_by_hr[hr_id]['department_distribution']:
+                hr_dept_chart_data[hr_id]['departments'][str(dept)] = {
+                    'avg_retention_risk': risk_analysis_by_hr[hr_id]['department_distribution'][dept]['avg_retention_risk'],
+                    'avg_mobility_score': risk_analysis_by_hr[hr_id]['department_distribution'][dept]['avg_mobility_score'],
+                    'avg_genius_factor': risk_analysis_by_hr[hr_id]['department_distribution'][dept]['avg_genius_factor'],
+                    'risk_distribution': risk_analysis_by_hr[hr_id]['department_distribution'][dept]['risk_distribution'],
+                    'genius_factor_distribution': risk_analysis_by_hr[hr_id]['department_distribution'][dept]['genius_factor_distribution'],
                     # NEW: Include sample employees for chart data
-                    'sample_employees': risk_analysis_by_hr[str(hr_id)]['department_distribution'][dept]['sample_employees']
+                    'sample_employees': risk_analysis_by_hr[hr_id]['department_distribution'][dept]['sample_employees']
                 }
 
-        # Prepare the response (UPDATED TO INCLUDE EMPLOYEE NAMES AND MAPPING)
+        # Prepare the response (UPDATED TO INCLUDE ONLY VALID HRs, EMPLOYEE NAMES AND MAPPING)
         response_data = {
             'overallMetrics': {
                 'total_reports': total_reports,
                 'total_employees': df['employee_id'].nunique(),
-                'total_hr_ids': len(unique_hr_ids),
+                'total_hr_ids': total_hr_ids,  # Now only counts valid real HR UUIDs
                 'total_departments': len(unique_departments),
                 'avg_retention_risk': overall_avg_retention_risk,
                 'avg_mobility_score': overall_avg_mobility,
@@ -887,16 +937,16 @@ async def admin_dashboard(sid, data):
                 'genius_factor_distribution': genius_factor_distribution,
                 'mobility_trends': {
                     'monthly': mobility_trends,
-                    'by_hr': hr_mobility_trends,
+                    'by_hr': hr_mobility_trends,  # Only valid HRs
                     'by_department': department_mobility_trends
                 }
             },
-            'hrMetrics': hr_stats,
-            'hrNameMapping': hr_name_mapping,
+            'hrMetrics': hr_stats,  # Only valid HRs
+            'hrNameMapping': hr_name_mapping,  # Only valid HRs
             'employeeNameMapping': employee_name_mapping,  # NEW: Added employee name mapping for frontend use
             'chartData': {
-                'risk_analysis_by_hr': risk_analysis_by_hr,
-                'hr_department_chart_data': hr_dept_chart_data
+                'risk_analysis_by_hr': risk_analysis_by_hr,  # Only valid HRs
+                'hr_department_chart_data': hr_dept_chart_data  # Only valid HRs
             },
             'employeeRiskDetails': employee_risk_details
         }

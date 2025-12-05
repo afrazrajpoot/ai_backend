@@ -194,7 +194,7 @@ workflow.add_edge("recommend", END)
 workflow.set_entry_point("rag_search")
 app = workflow.compile()
 
-@router.post("/applications")
+@router.post("/api/applications")
 async def create_application(
     request: dict = Body(...),  # Use Body for request body validation
 ):

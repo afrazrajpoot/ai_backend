@@ -52,6 +52,7 @@ model User {
   
   @@map("users")
 }
+
 // Optional: Store FastAPI sessions separately
 model FastAPISession {
   id        String   @id @default(uuid())

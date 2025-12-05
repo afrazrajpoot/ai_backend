@@ -1,11 +1,13 @@
 import io
 import pandas as pd
 import pyexcel_ods3
+import pyexcel
 from prisma import Prisma
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 
 db = Prisma()
 
-async def parse_and_save_jobs(file, recruiter_id: str):
+async def parse_and_save_jobs(file: UploadFile, recruiter_id: str):
     contents = await file.read()
     filename, ext = file.filename.lower().rsplit(".", 1)
     rows = []
@@ -38,7 +40,6 @@ async def parse_and_save_jobs(file, recruiter_id: str):
 
     # --- ODT ---
     elif ext == "odt":
-        import pyexcel
         sheet = pyexcel.get_sheet(file_type="odt", file_content=contents)
         header = sheet.colnames
         if not header or all([h is None or h == "" for h in header]):
@@ -54,10 +55,6 @@ async def parse_and_save_jobs(file, recruiter_id: str):
     if not rows:
         raise ValueError("File has no rows")
 
-    # --- Debug ---
-    for r in rows[:5]:
-        print(r)
-
     # --- Insert into Prisma ---
     await db.connect()
     inserted_jobs = []
@@ -68,38 +65,36 @@ async def parse_and_save_jobs(file, recruiter_id: str):
             continue
 
         try:
-            # Handle skills: extract as list if present, otherwise omit (for null)
+            # Handle skills
             skills_raw = row.get("skills")
             skills_data = None
             if skills_raw:
                 skills_list = [s.strip() for s in str(skills_raw).split(",") if s.strip()]
                 if skills_list:
-                    skills_data = skills_list  # Plain list; Prisma serializes to JSON
+                    skills_data = skills_list
 
-            # Base data without optional fields
+            # Base data
             data = {
                 "title": title,
                 "description": str(row.get("description", "")),
                 "type": str(row.get("type", "FULL_TIME")),
                 "status": "OPEN",
-                # Required relation: Use 'connect' instead of direct FK
-                "recruiter": {
-                    "connect": {
-                        "id": recruiter_id  # Assumes recruiter_id is a valid User ID
-                    }
-                },
+                # FIX: Use recruiterId directly instead of nested connect
+                "recruiterId": recruiter_id,
             }
 
-            # Add optional scalars only if set
+            # Add optional fields
             location = row.get("location")
             if location:
                 data["location"] = str(location)
 
             salary = row.get("salary")
             if salary:
-                data["salary"] = int(salary)
+                try:
+                    data["salary"] = int(salary)
+                except:
+                    pass
 
-            # Add skills only if present (omit for null)
             if skills_data is not None:
                 data["skills"] = skills_data
 
@@ -107,7 +102,35 @@ async def parse_and_save_jobs(file, recruiter_id: str):
             inserted_jobs.append(job)
 
         except Exception as e:
-            raise ValueError(f"Failed to insert row {idx+1}: {e}")
+            # FIX: Check if it's a foreign key constraint error
+            if "Foreign key constraint failed" in str(e) or "not found" in str(e):
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Recruiter with ID {recruiter_id} not found"
+                )
+            raise HTTPException(
+                status_code=400,
+                detail=f"Failed to insert row {idx+1}: {str(e)}"
+            )
 
     await db.disconnect()
     return inserted_jobs
+
+router = APIRouter(prefix="/jobs", tags=["jobs"])
+
+@router.post("/upload")
+async def upload_jobs(file: UploadFile = File(...), recruiter_id: str = Form(...)):
+    """
+    Upload a file containing jobs, parse and save into database.
+    """
+    try:
+        inserted_jobs = await parse_and_save_jobs(file, recruiter_id)
+        return {
+            "inserted": len(inserted_jobs),
+            "jobs": [{"id": job.id, "title": job.title} for job in inserted_jobs]
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=str(e)
+        )

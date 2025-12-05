@@ -94,7 +94,7 @@ Use markdown formatting for headers (e.g., **bold** for subheaders) and ensure t
 """
 )
 
-@router.post("/jobs/generate-description")
+@router.post("/api/jobs/generate-description")
 async def generate_description(request: DescriptionGenerateRequest):
     try:
         # Format skills as comma-separated string if provided
@@ -122,7 +122,7 @@ async def generate_description(request: DescriptionGenerateRequest):
         logger.error(f"AI Error generating description: {e}")
         raise HTTPException(status_code=500, detail="Failed to generate description")
 
-@router.post("/jobs/create")
+@router.post("/api/jobs/create")
 async def create_job(request: JobCreateRequest):
     prisma_client = Prisma()
     try:
