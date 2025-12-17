@@ -8,6 +8,7 @@ from services.employee_services.ai_services import JobRecommendationService
 from pydantic import BaseModel
 from utils.models import EmployeeRequest
 from services.employee_services.employee_dashboard import get_dashboard_service,generate_ai_recommendation
+import json
 class RecommendationRequest(BaseModel):
     recruiter_id: str
     employee_id: str
@@ -29,6 +30,21 @@ class DashboardController:
                     "aiRecommendation": "No assessment data available yet."
                 }
 
+            # Parse JSON fields if they are strings
+            for assess in assessments:
+                if isinstance(assess.get('results'), str):
+                    try:
+                        assess['results'] = json.loads(assess['results'])
+                    except json.JSONDecodeError:
+                        logger.warning(f"Failed to parse 'results' for assessment {assess.get('id')}")
+                        assess['results'] = {}
+                if isinstance(assess.get('allAnswers'), str):
+                    try:
+                        assess['allAnswers'] = json.loads(assess['allAnswers'])
+                    except json.JSONDecodeError:
+                        logger.warning(f"Failed to parse 'allAnswers' for assessment {assess.get('id')}")
+                        assess['allAnswers'] = {}
+            
             last_assessment = assessments[0] if assessments else None
             
             return {
@@ -36,10 +52,10 @@ class DashboardController:
                 "assessmentProgress": DashboardController._get_assessment_progress(assessments),
                 "completedAssessments": len(assessments),
                 "averageScore": DashboardController._get_average_score(assessments),
-                "careerMatches": len(last_assessment['results']['strengths']) if last_assessment else 0,
+                "careerMatches": len(last_assessment['results'].get('strengths', [])) if last_assessment else 0,
                 "recentRecommendations": DashboardController._get_recent_recommendations(last_assessment),
                 "monthlyStats": DashboardController._get_monthly_stats(assessments),
-                "aiRecommendation": await AIService.generate_career_recommendation(last_assessment, (last_assessment.get('allAnswers') if isinstance(last_assessment, dict) else {}))
+                "aiRecommendation": await AIService.generate_career_recommendation(last_assessment, (last_assessment.get('allAnswers', {}) if isinstance(last_assessment, dict) else {}))
             }
         except Exception as e:
             logger.error(f"Error in get_dashboard: {str(e)}")
@@ -80,6 +96,10 @@ class DashboardController:
         if not assessment or not assessment.get('results'):
             return []
             
+        results = assessment['results']
+        if not isinstance(results, dict):
+            return []
+            
         return [
             {
                 "title": f"{factor['name']} Role",
@@ -95,8 +115,8 @@ class DashboardController:
                 "link": "/career-pathways",
                 "trending": factor['score'] > 80
             }
-            for factor in assessment['results'].get('geniusFactors', [])
-            if factor['score'] > 70
+            for factor in results.get('geniusFactors', [])
+            if isinstance(factor, dict) and factor.get('score', 0) > 70
         ][:3]
 
     @staticmethod
@@ -124,7 +144,7 @@ class DashboardController:
 
 
             recommendation = JobRecommendationService()
-            recommendations = await recommendation.recommend_jobs_for_employee(employee_id, recruiter_id)
+            recommendations = await recommendation.recommend_jobs(employee_id, recruiter_id)
             print(recommendations,'recommendations')
             return {"recommendations": recommendations}
         except Exception as e:
