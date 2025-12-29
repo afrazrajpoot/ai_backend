@@ -38,6 +38,7 @@ sio = socketio.AsyncServer(
         "https://geniusfactor.ai",
         "https://www.geniusfactor.ai", 
         "https://api.geniusfactor.ai",
+        "https://genius-factor-client.vercel.app",
         "http://localhost:3000",
         "http://127.0.0.1:3000",
     ],
