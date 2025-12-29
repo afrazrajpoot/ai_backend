@@ -154,7 +154,11 @@ class AssessmentController:
         try:
             # Extract is_paid from input_data
             is_paid = input_data.is_paid if hasattr(input_data, 'is_paid') else False
-            logger.info(f"User {input_data.userId} is_paid status: {is_paid}")
+            # Extract is_paid from input_data
+            is_paid = input_data.is_paid if hasattr(input_data, 'is_paid') else False
+            # logger.info(f"User {input_data.userId} is_paid status: {is_paid}")
+            
+            # === fetch department ===
             
             # === fetch department ===
             db_params = {
@@ -194,8 +198,12 @@ class AssessmentController:
             # === 1. Convert and run basic analysis ===
             assessment_parts = [AssessmentPart(**part) for part in input_dict['data']]
             basic_results = analyze_assessment_data(assessment_parts)
-            logger.info("Basic analysis completed")
-            logger.debug(json.dumps(basic_results, indent=2))
+            assessment_parts = [AssessmentPart(**part) for part in input_dict['data']]
+            basic_results = analyze_assessment_data(assessment_parts)
+            # logger.info("Basic analysis completed")
+            # logger.debug(json.dumps(basic_results, indent=2))
+            
+            # === 2. Build raw answers for deep section analysis ===
 
             # === 2. Build raw answers for deep section analysis ===
             user_answers = {
@@ -215,15 +223,15 @@ class AssessmentController:
                 section_key = categorize_part_name(part.part)
                 user_answers[section_key].extend(letters)
 
-                logger.debug(f"Part '{part.part}' → bucket '{section_key}', letters={letters}")
+                # logger.debug(f"Part '{part.part}' → bucket '{section_key}', letters={letters}")
 
             # === 3. Deep analysis aggregated across all sections ===
             # Pass basic_results (list of dicts) instead of user_answers (dict)
             try:
                 deep_results = analyze_full_from_parts(basic_results)
                 deep_results["departement"] = input_data.departement
-                logger.info("Deep analysis completed")
-                logger.debug(json.dumps(deep_results, indent=2))
+                # logger.info("Deep analysis completed")
+                # logger.debug(json.dumps(deep_results, indent=2))
             except Exception as e:
                 logger.error(f"Deep analysis failed: {str(e)}")
                 # Continue without deep results
@@ -232,7 +240,7 @@ class AssessmentController:
             # === 4. RAG step with improved inputs ===
             try:
                 rag_results = await ai_service.analyze_majority_answers(basic_results, deep_results)
-                logger.info(f'RAG results: {rag_results}')
+                # logger.info(f'RAG results: {rag_results}')
             except Exception as e:
                 logger.exception("RAG analysis failed")
                 rag_results = f"RAG analysis failed: {str(e)}"
@@ -242,6 +250,8 @@ class AssessmentController:
                 recommendations = await ai_service.generate_career_recommendation(
                     rag_results, 
                     input_dict.get('allAnswers', []),
+                    user_id=input_dict.get('userId'),
+                    payload_data=input_dict
                 )
             except Exception as e:
                 logger.error(f"Failed to generate recommendations: {str(e)}")

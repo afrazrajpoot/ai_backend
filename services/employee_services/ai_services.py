@@ -219,10 +219,10 @@ Return ONLY a JSON object: {{"Job Title": 85, ...}}
             content = f"Title: {job['title']}\nDesc: {job['description']}\nSkills: {job['required_skills']}"
             docs.append(Document(page_content=content, metadata={"title": job['title']}))
             
-        # 3. Score
+    # 3. Score
         scored_results = self._score_jobs_intelligently(skills, positions, docs)
         
-        # 4. Update Scores
+    # 4. Update Scores
         for job in external_jobs:
             score_item = next((s for s in scored_results if s['title'] == job['title']), None)
             if score_item:
