@@ -69,7 +69,10 @@ class IndividualEmployeeReport(BaseModel):
     development_action_plan: DevelopmentActionPlan
     personalized_resources: PersonalizedResources
     data_sources_and_methodology: DataSourcesAndMethodology
-    genius_factor_score: int
+    data_sources_and_methodology: DataSourcesAndMethodology
+    genius_factor_score: int = Field(description="Overall Genius Factor Score (0-100)")
+    retention_risk_score: int = Field(description="Predicted Retention Risk Score (0-100)")
+    mobility_opportunity_score: int = Field(description="Internal Mobility Opportunity Score (0-100)")
 
 
 class EmployeeRequest(BaseModel):
