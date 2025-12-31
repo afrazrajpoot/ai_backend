@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Literal
+from datetime import datetime
 import asyncpg
 from langchain_openai import ChatOpenAI
 from langchain.prompts import PromptTemplate
@@ -11,16 +12,114 @@ from utils.logger import logger
 from config import settings
 
 
+# ==================== FIRST LLM OUTPUT MODEL ====================
 class StaticContextAnalysis(BaseModel):
     """Output from FIRST LLM: Genius factors and related info from static context"""
     primary_genius_factor: str = Field(description="Primary genius factor from static context")
     secondary_genius_factor: Optional[str] = Field(description="Secondary genius factor from static context")
     scoring_guide_for_factors: str = Field(description="Scoring guide sections for these genius factors")
     industries_for_factors: str = Field(description="Industry mapping for these genius factors")
+    primary_industries: List[str] = Field(description="List of primary industries for the identified genius factor")
+    secondary_industries: List[str] = Field(description="List of secondary industries for the identified genius factor")
     dominant_pattern: str = Field(description="Dominant response pattern (A, B, C, D)")
     key_insights: str = Field(description="Key insights from matching assessment to static context")
 
 
+# ==================== THIRD LLM OUTPUT MODELS ====================
+class GeniusFactorProfile(BaseModel):
+    """Genius factor profile section"""
+    primary_genius_factor: str = Field(description="Primary genius factor")
+    secondary_genius_factor: Optional[str] = Field(description="Secondary genius factor")
+    key_strengths: List[str] = Field(description="List of key strengths")
+    energy_sources: List[str] = Field(description="What motivates this profile")
+    development_areas: List[str] = Field(description="Areas for growth")
+    description: str = Field(description="Detailed description of the genius factor")
+
+
+class CurrentRoleAlignmentAnalysis(BaseModel):
+    """Current role alignment analysis section"""
+    alignment_score: int = Field(description="Alignment score (0-100)", ge=0, le=100)
+    strengths_utilized: List[str] = Field(description="Strengths currently utilized")
+    underutilized_talents: List[str] = Field(description="Underutilized talents")
+    retention_risk_factors: List[str] = Field(description="Risk factors for retention")
+    immediate_actions: List[str] = Field(description="Immediate improvement actions")
+
+
+class CareerOpportunity(BaseModel):
+    """Individual career opportunity"""
+    role_title: str = Field(description="Job title")
+    department: str = Field(description="Target department")
+    match_score: int = Field(description="Match score (0-100)", ge=0, le=100)
+    required_skills: List[str] = Field(description="Skills needed")
+    timeline: str = Field(description="Recommended timeline")
+    salary_impact: str = Field(description="Expected salary impact")
+
+
+class InternalCareerOpportunities(BaseModel):
+    """Internal career opportunities section"""
+    primary_industries: List[str] = Field(description="Primary industries for genius factor")
+    secondary_industries: List[str] = Field(description="Secondary industries")
+    recommended_departments: List[str] = Field(description="Recommended departments")
+    role_suggestions: List[CareerOpportunity] = Field(description="Specific role suggestions")
+    transition_strategy: str = Field(description="Overall transition strategy")
+
+
+class RetentionMobilityStrategies(BaseModel):
+    """Retention and mobility strategies section"""
+    retention_strategies: List[str] = Field(description="Retention strategies")
+    mobility_recommendations: List[str] = Field(description="Mobility recommendations")
+    development_support_needed: List[str] = Field(description="Required development support")
+    expected_outcomes: List[str] = Field(description="Expected outcomes")
+
+
+class DevelopmentActionPlan(BaseModel):
+    """Development action plan section"""
+    thirty_day_goals: List[str] = Field(description="30-day goals")
+    ninety_day_goals: List[str] = Field(description="90-day goals")
+    six_month_goals: List[str] = Field(description="6-month goals")
+    networking_strategy: Dict[str, List[str]] = Field(description="Networking strategy")
+
+
+class PersonalizedResources(BaseModel):
+    """Personalized resources section"""
+    affirmations: List[str] = Field(description="Personalized affirmations")
+    learning_resources: List[Dict[str, str]] = Field(description="Courses, books, etc.")
+    reflection_questions: List[str] = Field(description="Questions for self-reflection")
+    mindfulness_practices: List[str] = Field(description="Mindfulness practices")
+
+
+class DataSourcesMethodology(BaseModel):
+    """Data sources and methodology section"""
+    assessment_data_used: bool = Field(description="Assessment data utilized")
+    user_data_used: bool = Field(description="User data utilized")
+    static_context_used: bool = Field(description="Static context references used")
+    score_calculation_method: str = Field(description="Method used for score calculations")
+
+
+class ProfessionalAssessmentReport(BaseModel):
+    """Complete professional assessment report from THIRD LLM"""
+    executive_summary: str = Field(description="3-4 paragraph executive summary")
+    
+    # Core Scores
+    genius_factor_score: int = Field(description="Genius Factor Score (0-100)", ge=0, le=100)
+    retention_risk_score: int = Field(description="Retention Risk Score (0-100)", ge=0, le=100)
+    mobility_opportunity_score: int = Field(description="Mobility Opportunity Score (0-100)", ge=0, le=100)
+    
+    # Detailed Sections
+    genius_factor_profile: GeniusFactorProfile = Field(description="Genius factor profile")
+    current_role_alignment_analysis: CurrentRoleAlignmentAnalysis = Field(description="Role alignment analysis")
+    internal_career_opportunities: InternalCareerOpportunities = Field(description="Career opportunities")
+    retention_and_mobility_strategies: RetentionMobilityStrategies = Field(description="Retention strategies")
+    development_action_plan: DevelopmentActionPlan = Field(description="Development plan")
+    personalized_resources: PersonalizedResources = Field(description="Personalized resources")
+    data_sources_and_methodology: DataSourcesMethodology = Field(description="Data sources and methodology")
+    
+    # Metadata
+    generated_at: datetime = Field(default_factory=datetime.now)
+    report_version: str = Field(default="1.0")
+
+
+# ==================== AI SERVICE ====================
 class AIService:
     _prompts = None
     _static_context = None
@@ -73,7 +172,7 @@ class AIService:
             
             query = """
                 SELECT 
-                    u.id, u."firstName", u."lastName", u.email, u.position, u.department, u.salary,
+                    u.id, u."firstName", u."lastName", u.email, u.position, u.department, u.salary, u."hrId",
                     e.skills, e.education, e.experience, e.bio
                 FROM users u
                 LEFT JOIN "Employee" e ON u."employeeId" = e.id
@@ -129,8 +228,10 @@ class AIService:
                 2. **IDENTIFY** which genius factors from static context match (Tech, Social, Visual, Word, etc.)
                 3. **EXTRACT** the scoring guide sections for THOSE specific genius factors
                 4. **EXTRACT** the industry mapping for THOSE specific genius factors
-                5. **DETERMINE** dominant response pattern (A, B, C, D)
-                6. **PROVIDE** key insights about this match
+                5. **EXTRACT** the list of "Primary Industries" for the identified genius factor
+                6. **EXTRACT** the list of "Secondary Industries" for the identified genius factor
+                7. **DETERMINE** dominant response pattern (A, B, C, D)
+                8. **PROVIDE** key insights about this match
 
                 **IMPORTANT:** Only use genius factors defined in static context. Do not make up new ones.
 
@@ -140,12 +241,10 @@ class AIService:
                 partial_variables={"format_instructions": parser.get_format_instructions()}
             )
             
-            static_ctx = cls._load_static_context()
-            
             chain = prompt | llm | parser
             analysis = await chain.ainvoke({
-                "scoring_guide": static_ctx.get("scoring_guide", ""),
-                "industry_mapping": static_ctx.get("industry_mapping", ""),
+                "scoring_guide": static_context.get("scoring_guide", ""),
+                "industry_mapping": static_context.get("industry_mapping", ""),
                 "assessment_payload": json.dumps(assessment_data, indent=2, default=str)
             })
             
@@ -162,8 +261,8 @@ class AIService:
         static_analysis: StaticContextAnalysis,
         user_data: Dict,
         assessment_data: Dict
-    ) -> Dict[str, Any]:
-        """THIRD LLM: Generate complete professional report using static info + user data"""
+    ) -> ProfessionalAssessmentReport:
+        """THIRD LLM: Generate complete professional report using Pydantic parser"""
         try:
             llm = ChatOpenAI(
                 api_key=settings.OPENAI_API_KEY,
@@ -172,12 +271,36 @@ class AIService:
                 max_tokens=4000
             )
             
-            # Load system prompt for scoring rules
+            # Create output parser for the complete report
+            parser = PydanticOutputParser(pydantic_object=ProfessionalAssessmentReport)
+            
+            # Load system prompt
             prompt_data = cls._load_prompts()
             system_prompt = prompt_data.get('system_prompt', '')
             
-            # Professional report generation prompt
-            report_prompt = PromptTemplate(
+            # Helper function to safely extract and format data
+            def safe_extract(data, key, default="Not specified"):
+                value = data.get(key, default)
+                if isinstance(value, dict):
+                    try:
+                        return json.dumps(value)[:500]
+                    except:
+                        return str(value)[:500]
+                elif isinstance(value, list):
+                    return ", ".join(str(item) for item in value[:10])
+                return str(value)
+            
+            # Prepare user data safely
+            user_name = f"{user_data.get('firstName', '')} {user_data.get('lastName', '')}".strip() or "Employee"
+            user_position = safe_extract(user_data, "position")
+            user_department = safe_extract(user_data, "department")
+            user_salary = f"${user_data.get('salary', 0):,}" if user_data.get('salary') else "Not disclosed"
+            user_skills = safe_extract(user_data, "skills")
+            user_experience = safe_extract(user_data, "experience")
+            user_education = safe_extract(user_data, "education")
+            
+            # Create the prompt with Pydantic format instructions
+            prompt = PromptTemplate(
                 template=system_prompt + """
                 
                 ========== STATIC CONTEXT INFORMATION ==========
@@ -190,6 +313,9 @@ class AIService:
                 
                 **INDUSTRY MAPPING FOR THESE FACTORS:**
                 {industries_mapping}
+                
+                **PRIMARY INDUSTRIES:** {primary_industries}
+                **SECONDARY INDUSTRIES:** {secondary_industries}
                 
                 **DOMINANT PATTERN:** {dominant_pattern}
                 **KEY INSIGHTS:** {key_insights}
@@ -218,11 +344,11 @@ class AIService:
                 **REPORT MUST INCLUDE ALL THESE SECTIONS:**
 
                 1. **EXECUTIVE SUMMARY** (3-4 paragraphs):
-                   - Start with professional introduction
-                   - State identified genius factors clearly
-                   - Mention key industries from static context
-                   - Summarize career implications
-                   - End with strategic recommendations
+                   - Start with a highly professional, executive-level introduction
+                   - State identified genius factors clearly and confidently
+                   - Explicitly mention the **Primary Industries** and **Secondary Industries** identified
+                   - Summarize career implications with strategic depth
+                   - End with high-impact strategic recommendations
 
                 2. **GENIUS FACTOR PROFILE** (Detailed):
                    - Primary and secondary genius factors with descriptions
@@ -232,13 +358,15 @@ class AIService:
 
                 3. **CURRENT ROLE ALIGNMENT ANALYSIS** (Comprehensive):
                    - Detailed assessment of current position alignment
-                   - Alignment score with justification
+                   - Alignment score (0-100) with justification based on data
                    - List of strengths currently utilized
-                   - Retention risk level with specific factors
                    - Underutilized talents from assessment
+                   - Retention risk factors
                    - Immediate actions for improvement
 
                 4. **INTERNAL CAREER OPPORTUNITIES** (Specific):
+                   - **Primary Industries**: Use the extracted primary industries
+                   - **Secondary Industries**: Use the extracted secondary industries
                    - Recommended departments based on industry mapping
                    - 5-6 specific role suggestions with reasoning
                    - Required skill development for each role
@@ -264,31 +392,26 @@ class AIService:
                    - 3-4 mindfulness practices for career development
 
                 8. **DATA SOURCES & METHODOLOGY** (Transparent):
-                   - Detailed methodology of analysis
-                   - Specific data sources used
-                   - STEP-BY-STEP calculation of all three scores
-                   - Validation of score accuracy
+                   - Document what data was used
+                   - Explain methodology of analysis
+                   - Describe how scores were calculated
 
-                **CRITICAL REQUIREMENTS:**
-                - MUST include ALL industries from static context analysis
-                - MUST calculate all three scores based on assessment data
-                - MUST reference specific assessment patterns
-                - MUST be professional and extensive
-                - MUST return complete JSON structure
+                **SCORES TO CALCULATE (Based on analysis of all provided data):**
+                1. **Genius Factor Score (0-100)**: Calculate based on how strongly the assessment responses match the identified genius factors. Consider pattern consistency and alignment.
+                2. **Retention Risk Score (0-100)**: Calculate based on alignment between user's current role and identified genius factors. Consider position match, skills utilization, and satisfaction indicators.
+                3. **Mobility Opportunity Score (0-100)**: Calculate based on the number and quality of internal opportunities in identified industries. Consider industry growth, skill match, and career progression potential.
 
-                **SCORES TO CALCULATE:**
-                1. Genius Factor Score (0-100): Based on assessment patterns
-                2. Retention Risk Score (0-100): Based on role alignment
-                3. Mobility Opportunity Score (0-100): Based on industry opportunities
+                **IMPORTANT:** Calculate scores based on ALL provided data - assessment patterns, user profile, static context insights, and industry mapping.
 
-                Generate the complete professional report now.
-                Return ONLY the JSON report.
+                {format_instructions}
                 """,
                 input_variables=[
                     "primary_factor",
                     "secondary_factor",
                     "scoring_guide",
                     "industries_mapping",
+                    "primary_industries",
+                    "secondary_industries",
                     "dominant_pattern",
                     "key_insights",
                     "user_name",
@@ -299,144 +422,45 @@ class AIService:
                     "user_experience",
                     "user_education",
                     "assessment_payload"
-                ]
+                ],
+                partial_variables={"format_instructions": parser.get_format_instructions()}
             )
             
-            chain = report_prompt | llm
+            chain = prompt | llm | parser
             
             # Prepare all data for the report
             inputs = {
                 "primary_factor": static_analysis.primary_genius_factor,
                 "secondary_factor": static_analysis.secondary_genius_factor or "None identified",
                 "scoring_guide": static_analysis.scoring_guide_for_factors[:1500],
-                "industries_mapping": static_analysis.industries_for_factors[:2000],  # More industries
+                "industries_mapping": static_analysis.industries_for_factors[:2000],
+                "primary_industries": ", ".join(static_analysis.primary_industries),
+                "secondary_industries": ", ".join(static_analysis.secondary_industries),
                 "dominant_pattern": static_analysis.dominant_pattern,
                 "key_insights": static_analysis.key_insights,
-                "user_name": f"{user_data.get('firstName', '')} {user_data.get('lastName', '')}".strip() or "Employee",
-                "user_position": user_data.get("position", "Not specified"),
-                "user_department": user_data.get("department", "Not specified"),
-                "user_salary": f"${user_data.get('salary', 0):,}" if user_data.get('salary') else "Not disclosed",
-                "user_skills": user_data.get("skills", "Not specified"),
-                "user_experience": user_data.get("experience", "Not specified"),
-                "user_education": user_data.get("education", "Not specified"),
-                "assessment_payload": json.dumps(assessment_data, indent=2, default=str)[:3000]  # Limit size
+                "user_name": user_name,
+                "user_position": user_position,
+                "user_department": user_department,
+                "user_salary": user_salary,
+                "user_skills": user_skills,
+                "user_experience": user_experience,
+                "user_education": user_education,
+                "assessment_payload": json.dumps(assessment_data, indent=2, default=str)[:3000]
             }
             
-            report_output = await chain.ainvoke(inputs)
+            # Generate the report with Pydantic parser
+            report = await chain.ainvoke(inputs)
             
-            # Parse the JSON report
-            try:
-                report_content = report_output.content
-                # Extract JSON from response
-                import re
-                json_match = re.search(r'\{.*\}', report_content, re.DOTALL)
-                if json_match:
-                    report_dict = json.loads(json_match.group())
-                else:
-                    # If no JSON, create error
-                    raise ValueError("No JSON found in LLM response")
-                    
-            except Exception as e:
-                logger.error(f"Error parsing report JSON: {str(e)}")
-                # Create a minimal valid structure
-                report_dict = cls._create_minimal_report(static_analysis, user_data)
+            logger.info(f"✅ Professional report generated with scores: "
+                       f"G={report.genius_factor_score}, "
+                       f"R={report.retention_risk_score}, "
+                       f"M={report.mobility_opportunity_score}")
             
-            # Ensure report has all required fields
-            report_dict = cls._ensure_complete_report(report_dict, static_analysis)
-            
-            logger.info(f"Professional report generated with {len(report_dict)} sections")
-            return report_dict
+            return report
             
         except Exception as e:
             logger.error(f"Error generating professional report: {str(e)}")
             raise
-
-    @classmethod
-    def _create_minimal_report(cls, static_analysis: StaticContextAnalysis, user_data: Dict) -> Dict[str, Any]:
-        """Create a minimal valid report structure"""
-        return {
-            "executive_summary": f"Professional analysis for {user_data.get('firstName', 'Employee')} based on Genius Factor assessment.",
-            "genius_factor_score": 75,
-            "retention_risk_score": 50,
-            "mobility_opportunity_score": 65,
-            "genius_factor_profile": {
-                "primary_genius_factor": static_analysis.primary_genius_factor,
-                "secondary_genius_factor": static_analysis.secondary_genius_factor or "",
-                "description": f"Analysis indicates {static_analysis.primary_genius_factor} profile.",
-                "key_strengths": ["Analytical thinking", "Problem-solving", "Technical skills"],
-                "energy_sources": ["Challenging projects", "Technical innovation", "Team collaboration"],
-                "development_areas": ["Leadership development", "Advanced skills", "Strategic thinking"]
-            },
-            "current_role_alignment_analysis": {
-                "assessment": "Current role alignment analysis completed.",
-                "alignment_score": "75",
-                "strengths_utilized": ["Technical abilities", "Problem-solving"],
-                "retention_risk_level": "Moderate",
-                "underutilized_talents": ["Leadership potential", "Strategic planning"],
-                "immediate_actions": ["Skill development", "Project leadership", "Networking"]
-            },
-            "internal_career_opportunities": {
-                "recommended_departments": ["Technology", "Innovation", "Design"],
-                "specific_role_suggestions": ["Technical Lead", "Project Manager", "Design Specialist"],
-                "required_skill_development": ["Advanced training", "Leadership skills", "Technical expertise"],
-                "transition_timeline": {
-                    "short_term": "30-60 days: Skill assessment",
-                    "mid_term": "3-6 months: Project leadership",
-                    "long_term": "6-12 months: Role transition"
-                },
-                "success_metrics": ["Project completion", "Skill acquisition", "Career progression"]
-            },
-            "retention_and_mobility_strategies": {
-                "retention_strategies": ["Career path development", "Skill enhancement", "Competitive compensation"],
-                "internal_mobility_recommendations": ["Cross-department projects", "Leadership training", "Mentorship programs"],
-                "development_support": ["Training access", "Mentorship", "Conference participation"]
-            },
-            "development_action_plan": {
-                "thirty_day_goals": ["Complete skills assessment", "Identify development needs", "Start networking"],
-                "ninety_day_goals": ["Begin advanced training", "Lead small project", "Establish mentor relationship"],
-                "six_month_goals": ["Transition to target role", "Demonstrate leadership", "Achieve measurable impact"],
-                "networking_strategy": ["Join professional groups", "Attend industry events", "Connect with leaders"]
-            },
-            "personalized_resources": {
-                "affirmations": ["I have valuable skills to contribute", "I am capable of growth and success", "My work makes a difference"],
-                "learning_resources": ["Online certification courses", "Industry publications", "Professional development workshops"],
-                "reflection_questions": ["What are my core strengths?", "Where do I want to be in 1 year?", "How can I add more value?"],
-                "mindfulness_practices": ["Daily goal setting", "Weekly progress review", "Stress management techniques"]
-            },
-            "data_sources_and_methodology": {
-                "methodology": "Comprehensive analysis using Genius Factor assessment and static context.",
-                "data_sources": ["Assessment responses", "Static genius factor framework", "User profile data"],
-                "calculation_steps": "Scores calculated based on assessment patterns and static context alignment."
-            }
-        }
-
-    @classmethod
-    def _ensure_complete_report(cls, report_dict: Dict, static_analysis: StaticContextAnalysis) -> Dict[str, Any]:
-        """Ensure report has all required sections"""
-        required_sections = [
-            "executive_summary",
-            "genius_factor_profile",
-            "current_role_alignment_analysis",
-            "internal_career_opportunities",
-            "retention_and_mobility_strategies",
-            "development_action_plan",
-            "personalized_resources",
-            "data_sources_and_methodology",
-            "genius_factor_score",
-            "retention_risk_score",
-            "mobility_opportunity_score"
-        ]
-        
-        for section in required_sections:
-            if section not in report_dict:
-                if section.endswith("_score"):
-                    report_dict[section] = 75 if "genius" in section else 50
-                else:
-                    # Get from minimal report
-                    minimal = cls._create_minimal_report(static_analysis, {})
-                    report_dict[section] = minimal.get(section, {})
-        
-        return report_dict
 
     @classmethod
     async def analyze_majority_answers(cls, basic_results: List[Dict[str, Any]], deep_results: Dict[str, Any]) -> str:
@@ -457,9 +481,9 @@ class AIService:
         user_id: str = None, 
         payload_data: Dict = None
     ) -> Dict[str, Any]:
-        """Main method: Two-step professional report generation"""
+        """Main method: Two-step professional report generation with Pydantic parsers"""
         try:
-            logger.info("Starting two-step professional report generation...")
+            logger.info("Starting two-step professional report generation with Pydantic parsers...")
             
             # Fetch user data
             user_data = {}
@@ -467,52 +491,59 @@ class AIService:
                 user_data = await cls._fetch_user_data(user_id)
             
             # --- STEP 1: Extract genius factors and related info from static context ---
-            logger.info("Step 1: Extracting static context info...")
+            logger.info("Step 1: Extracting static context info with Pydantic parser...")
             static_analysis = await cls._first_llm_extract_static_info(payload_data)
             
-            # --- STEP 2: Generate complete professional report ---
-            logger.info("Step 2: Generating professional report...")
+            # --- STEP 2: Generate complete professional report with Pydantic parser ---
+            logger.info("Step 2: Generating professional report with Pydantic parser...")
             report = await cls._third_llm_generate_professional_report(
                 static_analysis,
                 user_data,
                 payload_data
             )
             
-            # Prepare final response
+            # Convert report to dict for database compatibility
+            report_dict = report.dict()
+            
+            # Prepare genius factors list
             genius_factors = [static_analysis.primary_genius_factor]
             if static_analysis.secondary_genius_factor:
                 genius_factors.append(static_analysis.secondary_genius_factor)
             
+            # Prepare risk_analysis JSON for database (matches your schema)
+            risk_analysis = {
+                "analysis_summary": static_analysis.key_insights,
+                "scores": {
+                    "genius_factor_score": report.genius_factor_score,
+                    "retention_risk_score": report.retention_risk_score,
+                    "mobility_opportunity_score": report.mobility_opportunity_score
+                },
+                "trends": {
+                    "retention_trends": "Based on professional analysis of role alignment",
+                    "mobility_trends": f"Opportunities identified in {len(static_analysis.primary_industries)} primary industries",
+                    "risk_factors": report.current_role_alignment_analysis.retention_risk_factors
+                },
+                "recommendations": report.retention_and_mobility_strategies.retention_strategies[:3],
+                "genius_factors": genius_factors,
+                "company": "Fortune 1000 Company"
+            }
+            
+            # Prepare final response
             response = {
                 "status": "success",
-                "report": report,
-                "risk_analysis": {
-                    "analysis_summary": static_analysis.key_insights,
-                    "scores": {
-                        "genius_factor_score": report.get("genius_factor_score", 75),
-                        "retention_risk_score": report.get("retention_risk_score", 50),
-                        "mobility_opportunity_score": report.get("mobility_opportunity_score", 65)
-                    },
-                    "trends": {
-                        "retention_trends": "Based on professional analysis",
-                        "mobility_trends": "Industry opportunities analyzed",
-                        "risk_factors": f"Analysis for {static_analysis.primary_genius_factor} profile"
-                    },
-                    "recommendations": report.get("retention_and_mobility_strategies", {}).get("retention_strategies", []),
-                    "genius_factors": genius_factors,
-                    "company": "Fortune 1000 Company"
-                },
+                "report": report_dict,
+                "risk_analysis": risk_analysis,
                 "context_analysis": {
                     "primary_genius_factor": static_analysis.primary_genius_factor,
                     "secondary_genius_factor": static_analysis.secondary_genius_factor,
                     "dominant_pattern": static_analysis.dominant_pattern,
                     "key_insights": static_analysis.key_insights,
                     "static_context_used": True,
-                    "report_completeness": "Professional extensive report"
+                    "report_completeness": "Professional extensive report with Pydantic validation"
                 }
             }
             
-            logger.info(f"Professional report complete. Factors: {genius_factors}")
+            logger.info(f"✅ Complete report generated with Pydantic validation")
             return response
             
         except Exception as e:

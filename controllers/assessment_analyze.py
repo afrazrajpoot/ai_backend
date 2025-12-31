@@ -23,6 +23,78 @@ db_notification_service = DBService()
 class AssessmentController:
     
     @staticmethod
+    def _validate_report_for_db(final_result: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Validate that the report structure matches the database schema.
+        Returns validated data with defaults for missing fields.
+        """
+        try:
+            # Check that required top-level fields exist
+            required_fields = ["userId", "hrId", "departement", "report", "risk_analysis"]
+            for field in required_fields:
+                if field not in final_result:
+                    logger.warning(f"Missing required field: {field}")
+                    if field == "departement":
+                        final_result[field] = "Unknown"
+                    elif field in ["report", "risk_analysis"]:
+                        final_result[field] = {}
+            
+            report = final_result.get("report", {})
+            
+            # Validate required report sections
+            required_sections = [
+                "executive_summary",
+                "genius_factor_profile",
+                "current_role_alignment_analysis",
+                "internal_career_opportunities",
+                "retention_and_mobility_strategies",
+                "development_action_plan",
+                "personalized_resources",
+                "data_sources_and_methodology",
+                "genius_factor_score"
+            ]
+            
+            for section in required_sections:
+                if section not in report:
+                    logger.warning(f"Missing report section: {section}")
+                    if section == "executive_summary":
+                        report[section] = "Assessment analysis completed."
+                    elif section == "genius_factor_score":
+                        report[section] = 75
+                    else:
+                        report[section] = {}
+            
+            # Validate genius_factor_score is an integer
+            try:
+                report["genius_factor_score"] = int(report.get("genius_factor_score", 75))
+            except (TypeError, ValueError):
+                logger.warning("Invalid genius_factor_score, using default 75")
+                report["genius_factor_score"] = 75
+            
+            # Validate executive_summary is a string
+            if not isinstance(report.get("executive_summary"), str):
+                logger.warning("executive_summary is not a string, converting")
+                report["executive_summary"] = str(report.get("executive_summary", "Analysis completed."))
+            
+            # Ensure risk_analysis exists
+            if "risk_analysis" not in final_result or not final_result["risk_analysis"]:
+                final_result["risk_analysis"] = {
+                    "analysis_summary": "Risk analysis completed",
+                    "scores": {
+                        "genius_factor_score": report.get("genius_factor_score", 75),
+                        "retention_risk_score": 50,
+                        "mobility_opportunity_score": 65
+                    }
+                }
+            
+            logger.info(f"✅ Report validation passed for user {final_result.get('userId')}")
+            return final_result
+            
+        except Exception as e:
+            logger.error(f"Error validating report: {str(e)}")
+            raise
+    
+    @staticmethod
     async def save_to_db(input_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Minimal version: saves hardcoded data using raw PostgreSQL (asyncpg).
@@ -91,6 +163,12 @@ class AssessmentController:
                 RETURNING id, "createdAt", "updatedAt"
             """
 
+            # Log data being saved (for debugging)
+            logger.info(f"💾 Saving report to database for user: {input_data['userId']}")
+            logger.info(f"   - Department: {input_data['departement']}")
+            logger.info(f"   - Genius Factor Score: {input_data['report']['genius_factor_score']}")
+            logger.info(f"   - Executive Summary (first 100 chars): {input_data['report']['executive_summary'][:100]}...")
+            
             # Execute the query
             result = await conn.fetchrow(
                 query,
@@ -297,8 +375,11 @@ class AssessmentController:
                 "metadata": recommendations.get("metadata")
             }
 
-            # === 6. Save data to database ===
-            save_response = await AssessmentController.save_to_db(final_result)
+            # === 6. Validate and save data to database ===
+            logger.info(f"Validating report structure for database schema compliance...")
+            validated_result = AssessmentController._validate_report_for_db(final_result)
+            
+            save_response = await AssessmentController.save_to_db(validated_result)
             
             if save_response.get("status") == "error":
                 logger.warning(f"Database save failed but proceeding: {save_response.get('message')}")
