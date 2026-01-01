@@ -32,6 +32,10 @@ model User {
   verificationToken String?
   resetToken       String?
   resetTokenExpiry DateTime?
+  
+  // Auto-login fields
+  autoLoginToken   String?
+  autoLoginExpiry  DateTime?
 
   department    String[]
   hrId          String?
@@ -123,15 +127,12 @@ model Employee {
   employeeId    String         @unique
   firstName     String
   lastName      String
-
-
   address       String?
   dateOfBirth   DateTime?
   hireDate      DateTime?
-
- manager        String?
-
- 
+  manager       String?
+  annualSalary  String?        // If you added this earlier
+  employer      String?        // Add this new field
   bio           String?
   avatar        String?
   skills        Json?
