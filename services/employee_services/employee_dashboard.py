@@ -116,12 +116,46 @@ async def get_dashboard_service(employee_id: str):
             if completed_assessments > 0 else None
         )
 
-        # 4. Get career recommendation from DB only (no generation)
+        # 4. Get career recommendation from DB, generate if not exists
         existing_rec = await prisma.aicareerrecommendation.find_first(
             where={"employeeId": employee_id},
         )
 
-        career_recommendation = existing_rec.careerRecommendation if existing_rec else None
+        if existing_rec:
+            career_recommendation = existing_rec.careerRecommendation
+        else:
+            # Generate new recommendation if none exists
+            llm = ChatOpenAI(model="gpt-4o", temperature=0.7)
+
+            # Get the latest report for recommendation generation
+            latest_report = reports[0] if reports else None
+
+            if latest_report:
+                prompt_template = ChatPromptTemplate.from_messages([
+                    ("system", "You are an expert HR career advisor. Write highly professional, extensive, and tailored career recommendations."),
+                    ("human", "Employee: {name}\nDepartment: {department}\nLatest Report Summary: {report_summary}\nGenius Factor Score: {latest_score}\nAverage Genius Factor Score: {avg_score}\n\nGenerate a professional career recommendation based on the most recent assessment.")
+                ])
+
+                prompt = prompt_template.format(
+                    name=f"{user.firstName} {user.lastName}",
+                    department=user.department,
+                    report_summary=latest_report.executiveSummary if latest_report else "No reports available",
+                    latest_score=latest_report.geniusFactorScore if latest_report else "N/A",
+                    avg_score=avg_genius_score
+                )
+
+                response = await llm.ainvoke(prompt)
+                career_recommendation = response.content
+
+                # Save new recommendation in DB
+                await prisma.aicareerrecommendation.create(
+                    data={
+                        "employeeId": employee_id,
+                        "careerRecommendation": career_recommendation
+                    }
+                )
+            else:
+                career_recommendation = "Complete an assessment to receive personalized career recommendations."
 
         return {
             "employeeId": user.employeeId,

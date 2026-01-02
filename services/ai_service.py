@@ -294,7 +294,21 @@ class AIService:
             user_name = f"{user_data.get('firstName', '')} {user_data.get('lastName', '')}".strip() or "Employee"
             user_position = safe_extract(user_data, "position")
             user_department = safe_extract(user_data, "department")
-            user_salary = f"${user_data.get('salary', 0):,}" if user_data.get('salary') else "Not disclosed"
+            
+            # Safely format salary: handle string/numeric conversion and formatting
+            salary_val = user_data.get('salary')
+            if salary_val:
+                try:
+                    num_salary = float(salary_val)
+                    if num_salary > 0:
+                        user_salary = f"${num_salary:,.0f}"
+                    else:
+                        user_salary = "Not disclosed"
+                except (ValueError, TypeError):
+                    user_salary = "Not disclosed"
+            else:
+                user_salary = "Not disclosed"
+            
             user_skills = safe_extract(user_data, "skills")
             user_experience = safe_extract(user_data, "experience")
             user_education = safe_extract(user_data, "education")
