@@ -273,9 +273,16 @@ Instructions:
         """Search a specific site with a query."""
         site_query = f"{query} site:{site}"
         print(f"  ExternalJobFetcher: Searching {site} for '{query}'")
-        
+
         try:
             raw_results = self.tavily.invoke({"query": site_query})
+
+            # Log raw data from web search
+            print(f"  ExternalJobFetcher: Raw results from {site} (count: {len(raw_results) if raw_results else 0}):")
+            if raw_results and isinstance(raw_results, list):
+                for i, result in enumerate(raw_results[:3]):  # Log first 3 results
+                    print(f"    Result {i+1}: {result}")
+
             if not raw_results or not isinstance(raw_results, list):
                 return []
             
@@ -330,30 +337,30 @@ Instructions:
     async def fetch_external_jobs(self, skills: List[str], positions: List[str]) -> List[Dict[str, Any]]:
         """Main method to fetch external jobs."""
         print(f"ExternalJobFetcher: Starting search for skills={skills}, positions={positions}")
-        
+
         queries = self._generate_search_queries(skills, positions)
         sites = ["indeed.com", "linkedin.com/jobs", "glassdoor.com"]
         all_jobs = []
         seen_titles = set()
-        
-        for site in sites:
-            site_jobs = []
-            for query in queries[:3]:
-                jobs = self._fetch_with_query(query, site, skills)
-                for job in jobs:
-                    if job['title'] not in seen_titles:
-                        seen_titles.add(job['title'])
-                        site_jobs.append(job)
-                if len(site_jobs) >= 2: # Limit per site as requested
-                    break
-            all_jobs.extend(site_jobs)
+
+        # Only perform 3 web searches total - one query per site
+        for i, site in enumerate(sites):
+            if i >= 3:  # Safety check, though we only have 3 sites
+                break
+
+            query = queries[i] if i < len(queries) else queries[0]  # Use different query per site if available
+            jobs = self._fetch_with_query(query, site, skills)
+            for job in jobs:
+                if job['title'] not in seen_titles:
+                    seen_titles.add(job['title'])
+                    all_jobs.append(job)
             time.sleep(1) # Polite delay
-            
+
         print(f"ExternalJobFetcher: Total found: {len(all_jobs)}")
-        
+
         if not all_jobs:
             return self._create_skill_based_fallback(skills)
-            
+
         return all_jobs
 
     def _create_skill_based_fallback(self, skills: List[str]) -> List[Dict[str, Any]]:
