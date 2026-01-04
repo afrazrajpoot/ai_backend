@@ -305,25 +305,51 @@ Instructions:
             if not extracted or not isinstance(extracted, list):
                 return []
 
+            # Create jobs using raw data titles instead of LLM extracted titles
             formatted_jobs = []
-            for job in extracted:
-                if not isinstance(job, dict): continue
-                
-                title = job.get("title", "Unknown").strip()
-                if not title or title == "Unknown": continue
+            for raw_result in raw_results[:5]:  # Use first 5 raw results
+                if not isinstance(raw_result, dict): continue
+
+                raw_title = raw_result.get("title", "")
+                if not raw_title: continue
+
+                # Try to find matching extracted job for additional details
+                matching_extracted = None
+                for job in extracted:
+                    if isinstance(job, dict) and job.get("title"):
+                        # Simple matching based on title similarity
+                        if raw_title.lower().replace(" ", "") == job.get("title", "").lower().replace(" ", ""):
+                            matching_extracted = job
+                            break
+
+                # Use extracted data if available, otherwise use defaults
+                company = "Unknown"
+                description = raw_result.get("content", "")[:200]  # Use raw content as description
+                location = "Remote/On-site"
+                job_type = "Full-time"
+                url = raw_result.get("url", "#")
+                required_skills = target_skills[:3]
+
+                if matching_extracted:
+                    company = matching_extracted.get("company", company)
+                    description = matching_extracted.get("description", description)
+                    location = matching_extracted.get("location", location)
+                    job_type = matching_extracted.get("type", job_type)
+                    url = matching_extracted.get("url", url)
+                    required_skills = matching_extracted.get("required_skills", required_skills)
 
                 formatted_jobs.append({
-                    "id": f"{site}_{abs(hash(title + job.get('url', '')))}",
-                    "title": title,
-                    "company": job.get("company", "Unknown"),
-                    "description": job.get("description", ""),
-                    "location": job.get("location", "Remote/On-site"),
-                    "type": job.get("type", "Full-time"),
-                    "url": job.get("url", "#"),
-                    "required_skills": job.get("required_skills", target_skills[:3]),
+                    "id": f"{site}_{abs(hash(raw_title + url))}",
+                    "title": raw_title,  # Use raw title from web search
+                    "company": company,
+                    "description": description,
+                    "location": location,
+                    "type": job_type,
+                    "url": url,
+                    "required_skills": required_skills,
                     "recruiterId": "external",
                     "match_score": 60.0, # Base score
-                    "source_url": job.get("url", "#"),
+                    "source_url": url,
                     "is_external": True,
                     "source": "external"
                 })
