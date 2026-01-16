@@ -12,6 +12,8 @@ from services.notification_service import NotificationService
 from typing import Dict, Any
 import httpx
 from fastapi import HTTPException
+import asyncio
+
 
 # Singleton AIService instance (assumed to be defined elsewhere)
 ai_service = AIService()
@@ -227,204 +229,185 @@ class AssessmentController:
     async def analyze_assessment(input_data: AssessmentData) -> Dict[str, Any]:
         """
         Endpoint for assessment analysis with deep section-by-section
-        genius detection and real-time notifications
+        genius detection and real-time notifications with retry logic.
         """
-        try:
-            # Extract is_paid from input_data
-            is_paid = input_data.is_paid if hasattr(input_data, 'is_paid') else False
-            # Extract is_paid from input_data
-            is_paid = input_data.is_paid if hasattr(input_data, 'is_paid') else False
-            # logger.info(f"User {input_data.userId} is_paid status: {is_paid}")
-            
-            # === fetch department ===
-            
-            # === fetch department ===
-            db_params = {
-                "user": "postgres", "password": "root",
-                "database": "genius_factor", "host": "localhost", "port": 5432
-            }
-            conn = await asyncpg.connect(**db_params)
-            departement = await conn.fetchval(
-                'SELECT "department"[array_length("department", 1)] FROM "users" WHERE id = $1',
-                input_data.userId
-            )
-            await conn.close()
-            if not departement:
-                departement = "Unknown"
-
-            input_dict = input_data.dict()
-            input_dict["departement"] = departement
-
-            # === validate notification data ===
-            notification_data = {
-                'employeeId': input_dict['userId'],
-                'hrId': input_dict['hrId'],
-                'employeeName': input_dict['employeeName'],
-                'employeeEmail': input_dict['employeeEmail'],
-                'message': 'Assessment analysis completed successfully!',
-                'status': 'unread'
-            }
-            for k, v in notification_data.items():
-                if not isinstance(v, str) or not v.strip():
-                    logger.error(f"Invalid notification data: {k}")
-                    await NotificationService.send_user_notification(
-                        input_dict['userId'], input_dict['hrId'],
-                        {'message': 'Invalid notification data', 'progress': 0, 'status': 'error', 'error': f"Field {k} is invalid"}
-                    )
-                    raise HTTPException(status_code=400, detail=f"Invalid notification data: {k}")
-
-            # === 1. Convert and run basic analysis ===
-            assessment_parts = [AssessmentPart(**part) for part in input_dict['data']]
-            basic_results = analyze_assessment_data(assessment_parts)
-            assessment_parts = [AssessmentPart(**part) for part in input_dict['data']]
-            basic_results = analyze_assessment_data(assessment_parts)
-            # logger.info("Basic analysis completed")
-            # logger.debug(json.dumps(basic_results, indent=2))
-            
-            # === 2. Build raw answers for deep section analysis ===
-
-            # === 2. Build raw answers for deep section analysis ===
-            user_answers = {
-                "SelfAwareness": [],
-                "Talent": [],
-                "Passion": [],
-                "Mapping": [],
-                "Goals": []
-            }
-
-            for part in assessment_parts:
-                letters = []
-                for letter, count in part.optionCounts.dict(exclude_none=True).items():
-                    letters.extend([letter] * count)
-
-                # ✅ categorize using the robust helper
-                section_key = categorize_part_name(part.part)
-                user_answers[section_key].extend(letters)
-
-                # logger.debug(f"Part '{part.part}' → bucket '{section_key}', letters={letters}")
-
-            # === 3. Deep analysis aggregated across all sections ===
-            # Pass basic_results (list of dicts) instead of user_answers (dict)
+        max_retries = 3
+        last_error = None
+        
+        for attempt in range(max_retries):
             try:
-                deep_results = analyze_full_from_parts(basic_results)
-                deep_results["departement"] = input_data.departement
-                # logger.info("Deep analysis completed")
-                # logger.debug(json.dumps(deep_results, indent=2))
-            except Exception as e:
-                logger.error(f"Deep analysis failed: {str(e)}")
-                # Continue without deep results
-                deep_results = {"error": f"Deep analysis failed: {str(e)}"}
-
-            # === 4. RAG step with improved inputs ===
-            try:
-                rag_results = await ai_service.analyze_majority_answers(basic_results, deep_results)
-                # logger.info(f'RAG results: {rag_results}')
-            except Exception as e:
-                logger.exception("RAG analysis failed")
-                rag_results = f"RAG analysis failed: {str(e)}"
-
-            # === 5. Generate professional career recommendation report ===
-            try:
-                recommendations = await ai_service.generate_career_recommendation(
-                    rag_results, 
-                    input_dict.get('allAnswers', []),
-                    user_id=input_dict.get('userId'),
-                    payload_data=input_dict
-                )
-            except Exception as e:
-                logger.error(f"Failed to generate recommendations: {str(e)}")
-                await NotificationService.send_user_notification(
-                    input_dict['userId'],
-                    input_dict['hrId'],
-                    {
-                        'message': 'Failed to generate recommendations',
-                        'progress': 100,
-                        'status': 'error',
-                        'error': str(e)
-                    }
-                )
-                raise HTTPException(status_code=500, detail=str(e))
-            
-            if recommendations.get("status") != "success":
-                error_msg = f"Failed to generate recommendations: {recommendations.get('message', 'Unknown error')}"
-                logger.error(error_msg)
+                # Extract is_paid from input_data
+                is_paid = input_data.is_paid if hasattr(input_data, 'is_paid') else False
                 
-                await NotificationService.send_user_notification(
-                    input_dict['userId'],
-                    input_dict['hrId'],
-                    {
-                        'message': 'Analysis failed',
-                        'progress': 100,
-                        'status': 'error',
-                        'error': error_msg
-                    }
+                # === fetch department ===
+                db_params = {
+                    "user": "postgres", "password": "root",
+                    "database": "genius_factor", "host": "localhost", "port": 5432
+                }
+                conn = await asyncpg.connect(**db_params)
+                departement = await conn.fetchval(
+                    'SELECT "department"[array_length("department", 1)] FROM "users" WHERE id = $1',
+                    input_data.userId
                 )
-                
-                raise HTTPException(status_code=500, detail="Failed to generate career recommendations")
+                await conn.close()
+                if not departement:
+                    departement = "Unknown"
 
-            # Prepare final result - Include basic_results as 'data' for frontend compatibility (array format)
-            final_result = {
-                "success": True,
-                "data": basic_results,  # This is the array of AssessmentAnalysisResult expected by frontend
-                "hrId": input_dict['hrId'],
-                "departement": input_dict['departement'],
-                "userId": input_dict['userId'],
-                "report": recommendations.get("report"),
-                "user_type": recommendations.get("user_type", "free"),  # Add user type to response
-                "risk_analysis": recommendations.get("risk_analysis"),
-                "metadata": recommendations.get("metadata")
-            }
+                input_dict = input_data.dict()
+                input_dict["departement"] = departement
 
-            # === 6. Validate and save data to database ===
-            logger.info(f"Validating report structure for database schema compliance...")
-            validated_result = AssessmentController._validate_report_for_db(final_result)
-            
-            save_response = await AssessmentController.save_to_db(validated_result)
-            
-            if save_response.get("status") == "error":
-                logger.warning(f"Database save failed but proceeding: {save_response.get('message')}")
-                # Continue even if database save fails, but log the warning
-
-            # Send success notification via Socket.IO
-            await NotificationService.send_user_notification(
-                input_dict['userId'],
-                input_dict['hrId'],
-                {
-                    'message': 'Assessment analysis completed successfully!',
+                # === validate notification data ===
+                notification_data = {
+                    'employeeId': input_dict['userId'],
+                    'hrId': input_dict['hrId'],
                     'employeeName': input_dict['employeeName'],
                     'employeeEmail': input_dict['employeeEmail'],
-                    'progress': 100,
-                    'status': 'unread',
-                    'user_type': 'paid' if is_paid else 'free'
+                    'message': 'Assessment analysis completed successfully!',
+                    'status': 'unread'
                 }
-            )
+                for k, v in notification_data.items():
+                    if not isinstance(v, str) or not v.strip():
+                        logger.error(f"Invalid notification data: {k}")
+                        await NotificationService.send_user_notification(
+                            input_dict['userId'], input_dict['hrId'],
+                            {'message': 'Invalid notification data', 'progress': 0, 'status': 'error', 'error': f"Field {k} is invalid"}
+                        )
+                        raise HTTPException(status_code=400, detail=f"Invalid notification data: {k}")
 
-            # Save notification to database using DatabaseNotificationService
-            try:
-                await db_notification_service.save_notification(notification_data)
-            except Exception as e:
-                logger.error(f"Error saving notification: {str(e)}")
-                # Continue even if notification save fails
+                # === 1. Convert and run basic analysis ===
+                assessment_parts = [AssessmentPart(**part) for part in input_dict['data']]
+                basic_results = analyze_assessment_data(assessment_parts)
+                
+                # === 2. Build raw answers for deep section analysis ===
+                user_answers = {
+                    "SelfAwareness": [],
+                    "Talent": [],
+                    "Passion": [],
+                    "Mapping": [],
+                    "Goals": []
+                }
 
-            return final_result  # Explicitly return the final_result
+                for part in assessment_parts:
+                    letters = []
+                    for letter, count in part.optionCounts.dict(exclude_none=True).items():
+                        letters.extend([letter] * count)
 
-        except Exception as e:
-            logger.error(f"Error in analyze_assessment: {str(e)}")
-            
-            # Get userId and hrId safely
-            user_id = getattr(input_data, 'userId', None)
-            hr_id = getattr(input_data, 'hrId', None)
-            
-            if user_id and hr_id:
+                    # ✅ categorize using the robust helper
+                    section_key = categorize_part_name(part.part)
+                    user_answers[section_key].extend(letters)
+
+                # === 3. Deep analysis aggregated across all sections ===
+                try:
+                    deep_results = analyze_full_from_parts(basic_results)
+                    deep_results["departement"] = input_data.departement
+                except Exception as e:
+                    logger.error(f"Deep analysis failed: {str(e)}")
+                    deep_results = {"error": f"Deep analysis failed: {str(e)}"}
+
+                # === 4. RAG step with improved inputs ===
+                try:
+                    rag_results = await ai_service.analyze_majority_answers(basic_results, deep_results)
+                except Exception as e:
+                    logger.exception("RAG analysis failed")
+                    rag_results = f"RAG analysis failed: {str(e)}"
+
+                # === 5. Generate professional career recommendation report ===
+                try:
+                    recommendations = await ai_service.generate_career_recommendation(
+                        rag_results, 
+                        input_dict.get('allAnswers', []),
+                        user_id=input_dict.get('userId'),
+                        payload_data=input_dict
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to generate recommendations: {str(e)}")
+                    # We don't raise here yet, we'll check recommendations status below
+                    recommendations = {"status": "error", "message": str(e)}
+                
+                if recommendations.get("status") != "success":
+                    error_msg = f"Failed to generate recommendations: {recommendations.get('message', 'Unknown error')}"
+                    logger.error(error_msg)
+                    raise Exception(error_msg) # Raise to trigger retry
+
+                # Prepare final result
+                final_result = {
+                    "success": True,
+                    "data": basic_results,
+                    "hrId": input_dict['hrId'],
+                    "departement": input_dict['departement'],
+                    "userId": input_dict['userId'],
+                    "report": recommendations.get("report"),
+                    "user_type": recommendations.get("user_type", "free"),
+                    "risk_analysis": recommendations.get("risk_analysis"),
+                    "metadata": recommendations.get("metadata")
+                }
+
+                # === 6. Validate and save data to database ===
+                logger.info(f"Validating report structure for database schema compliance...")
+                validated_result = AssessmentController._validate_report_for_db(final_result)
+                
+                save_response = await AssessmentController.save_to_db(validated_result)
+                
+                if save_response.get("status") == "error":
+                    logger.warning(f"Database save failed but proceeding: {save_response.get('message')}")
+
+                # Send success notification via Socket.IO
                 await NotificationService.send_user_notification(
-                    user_id,
-                    hr_id,
+                    input_dict['userId'],
+                    input_dict['hrId'],
                     {
-                        'message': 'Assessment analysis failed',
+                        'message': 'Assessment analysis completed successfully!',
+                        'employeeName': input_dict['employeeName'],
+                        'employeeEmail': input_dict['employeeEmail'],
                         'progress': 100,
-                        'status': 'error',
-                        'error': str(e)
+                        'status': 'unread',
+                        'user_type': 'paid' if is_paid else 'free'
                     }
                 )
+
+                # Save notification to database
+                try:
+                    await db_notification_service.save_notification(notification_data)
+                except Exception as e:
+                    logger.error(f"Error saving notification: {str(e)}")
+
+                return final_result
+
+            except HTTPException as e:
+                # If it's a client error (4xx), don't retry
+                if e.status_code < 500:
+                    raise e
+                last_error = e
+                logger.warning(f"Attempt {attempt + 1} failed with HTTPException {e.status_code}: {e.detail}. Retrying...")
+            except Exception as e:
+                last_error = e
+                logger.warning(f"Attempt {attempt + 1} failed with error: {str(e)}. Retrying...")
             
-            raise HTTPException(status_code=500, detail=str(e))
+            if attempt < max_retries - 1:
+                wait_time = (attempt + 1) * 2
+                logger.info(f"Waiting {wait_time} seconds before retry...")
+                await asyncio.sleep(wait_time)
+
+        # If we reach here, all retries failed
+        logger.error(f"All {max_retries} attempts failed for analyze_assessment. Last error: {str(last_error)}")
+        
+        # Get userId and hrId safely
+        user_id = getattr(input_data, 'userId', None)
+        hr_id = getattr(input_data, 'hrId', None)
+        
+        if user_id and hr_id:
+            await NotificationService.send_user_notification(
+                user_id,
+                hr_id,
+                {
+                    'message': 'Assessment analysis failed',
+                    'progress': 100,
+                    'status': 'error',
+                    'error': "We encountered a persistent issue while analyzing your assessment. Please try again later."
+                }
+            )
+        
+        raise HTTPException(
+            status_code=500, 
+            detail="We're sorry, but we encountered a persistent issue while analyzing your assessment. Please try again in a few moments. If the problem persists, please contact support."
+        )

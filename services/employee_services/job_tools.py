@@ -362,25 +362,33 @@ Instructions:
 
     async def fetch_external_jobs(self, skills: List[str], positions: List[str]) -> List[Dict[str, Any]]:
         """Main method to fetch external jobs."""
+        import asyncio
         print(f"ExternalJobFetcher: Starting search for skills={skills}, positions={positions}")
 
         queries = self._generate_search_queries(skills, positions)
         sites = ["indeed.com", "linkedin.com/jobs", "glassdoor.com"]
+        
+        # Create tasks for parallel execution
+        tasks = []
+        for i, site in enumerate(sites):
+            query = queries[i] if i < len(queries) else queries[0]
+            # We need to run the synchronous _fetch_with_query in a thread to avoid blocking
+            tasks.append(asyncio.to_thread(self._fetch_with_query, query, site, skills))
+        
+        # Run all searches in parallel
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
         all_jobs = []
         seen_titles = set()
-
-        # Only perform 3 web searches total - one query per site
-        for i, site in enumerate(sites):
-            if i >= 3:  # Safety check, though we only have 3 sites
-                break
-
-            query = queries[i] if i < len(queries) else queries[0]  # Use different query per site if available
-            jobs = self._fetch_with_query(query, site, skills)
-            for job in jobs:
-                if job['title'] not in seen_titles:
-                    seen_titles.add(job['title'])
-                    all_jobs.append(job)
-            time.sleep(1) # Polite delay
+        
+        for jobs in results:
+            if isinstance(jobs, list):
+                for job in jobs:
+                    if job['title'] not in seen_titles:
+                        seen_titles.add(job['title'])
+                        all_jobs.append(job)
+            elif isinstance(jobs, Exception):
+                print(f"ExternalJobFetcher: Search task failed: {jobs}")
 
         print(f"ExternalJobFetcher: Total found: {len(all_jobs)}")
 

@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import asyncio
 from typing import List, Dict, Optional, Any
 from dataclasses import dataclass
 
@@ -111,7 +112,7 @@ Return ONLY a JSON object: {{"Job Title": 85, ...}}
         except: pass
         return {}
 
-    def _score_jobs_intelligently(self, user_skills: List[str], user_positions: List[str], job_docs: List[Document]) -> List[Dict[str, Any]]:
+    async def _score_jobs_intelligently(self, user_skills: List[str], user_positions: List[str], job_docs: List[Document]) -> List[Dict[str, Any]]:
         """Score a list of job documents using LLM."""
         if not job_docs: return []
         
@@ -122,7 +123,9 @@ Return ONLY a JSON object: {{"Job Title": 85, ...}}
         ])
         
         try:
-            response = self.scoring_chain.run(
+            # Run the synchronous chain in a thread
+            response = await asyncio.to_thread(
+                self.scoring_chain.run,
                 user_skills=", ".join(user_skills[:10]),
                 user_positions=", ".join(user_positions[:5]),
                 jobs_list=jobs_text
@@ -152,11 +155,13 @@ Return ONLY a JSON object: {{"Job Title": 85, ...}}
             print(f"Error scoring jobs: {e}")
             return [{'title': d.metadata.get('title'), 'match_score': 50.0, 'document': d} for d in job_docs]
 
-    async def get_internal_jobs(self, user_id: str, recruiter_id: str) -> List[Dict[str, Any]]:
+    async def get_internal_jobs(self, user_id: str, recruiter_id: str, user_data: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         """Get and score internal jobs."""
         print(f"JobRecommendationService: Getting INTERNAL jobs for {user_id}")
         
-        user_data = await self._fetch_and_parse_user(user_id)
+        if not user_data:
+            user_data = await self._fetch_and_parse_user(user_id)
+            
         if not user_data: return []
         
         skills, positions = self._extract_user_skills_and_positions(user_data)
@@ -164,13 +169,17 @@ Return ONLY a JSON object: {{"Job Title": 85, ...}}
         
         # 1. Fetch Candidates
         query = f"{' '.join(positions[:2])} {' '.join(skills[:3])}"
-        candidates = await self.internal_fetcher.fetch_jobs(query, recruiter_id)
+        try:
+            candidates = await self.internal_fetcher.fetch_jobs(query, recruiter_id)
+        except Exception as e:
+            print(f"JobRecommendationService: Error fetching internal jobs: {e}")
+            return []
         
         if not candidates: return []
         
         # 2. Score Candidates
         docs = [c['vector_doc'] for c in candidates]
-        scored_results = self._score_jobs_intelligently(skills, positions, docs)
+        scored_results = await self._score_jobs_intelligently(skills, positions, docs)
         
         # 3. Format Response
         final_jobs = []
@@ -199,18 +208,25 @@ Return ONLY a JSON object: {{"Job Title": 85, ...}}
             
         return final_jobs
 
-    async def get_external_jobs(self, user_id: str) -> List[Dict[str, Any]]:
+    async def get_external_jobs(self, user_id: str, user_data: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         """Get and score external jobs."""
         print(f"JobRecommendationService: Getting EXTERNAL jobs for {user_id}")
         
-        user_data = await self._fetch_and_parse_user(user_id)
+        if not user_data:
+            user_data = await self._fetch_and_parse_user(user_id)
+            
         if not user_data: return []
         
         skills, positions = self._extract_user_skills_and_positions(user_data)
         if not skills: return []
         
         # 1. Fetch Candidates
-        external_jobs = await self.external_fetcher.fetch_external_jobs(skills, positions)
+        try:
+            external_jobs = await self.external_fetcher.fetch_external_jobs(skills, positions)
+        except Exception as e:
+            print(f"JobRecommendationService: Error fetching external jobs: {e}")
+            return []
+            
         if not external_jobs: return []
         
         # 2. Prepare for Scoring
@@ -219,10 +235,10 @@ Return ONLY a JSON object: {{"Job Title": 85, ...}}
             content = f"Title: {job['title']}\nDesc: {job['description']}\nSkills: {job['required_skills']}"
             docs.append(Document(page_content=content, metadata={"title": job['title']}))
             
-    # 3. Score
-        scored_results = self._score_jobs_intelligently(skills, positions, docs)
+        # 3. Score
+        scored_results = await self._score_jobs_intelligently(skills, positions, docs)
         
-    # 4. Update Scores
+        # 4. Update Scores
         for job in external_jobs:
             score_item = next((s for s in scored_results if s['title'] == job['title']), None)
             if score_item:
@@ -231,17 +247,45 @@ Return ONLY a JSON object: {{"Job Title": 85, ...}}
         return external_jobs
 
     async def recommend_jobs(self, user_id: str, recruiter_id: str, include_external: bool = True) -> List[Dict[str, Any]]:
-        """Get recommendations from all sources."""
-        print(f"JobRecommendationService: Generating recommendations...")
+        """Get recommendations from all sources in parallel."""
+        print(f"JobRecommendationService: Generating recommendations for user {user_id}...")
         
-        internal = await self.get_internal_jobs(user_id, recruiter_id)
-        
-        external = []
-        if include_external:
-            external = await self.get_external_jobs(user_id)
+        try:
+            # 1. Fetch user data once
+            user_data = await self._fetch_and_parse_user(user_id)
+            if not user_data:
+                print(f"JobRecommendationService: User {user_id} not found")
+                return []
             
-        # Combine and sort by score
-        all_jobs = internal + external
-        all_jobs.sort(key=lambda x: x.get('match_score', 0), reverse=True)
-        
-        return all_jobs
+            # 2. Run internal and external fetches in parallel
+            tasks = [self.get_internal_jobs(user_id, recruiter_id, user_data)]
+            if include_external:
+                tasks.append(self.get_external_jobs(user_id, user_data))
+            
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            internal_jobs = []
+            external_jobs = []
+            
+            if len(results) > 0:
+                if isinstance(results[0], list):
+                    internal_jobs = results[0]
+                else:
+                    print(f"JobRecommendationService: Internal jobs fetch failed: {results[0]}")
+            
+            if len(results) > 1:
+                if isinstance(results[1], list):
+                    external_jobs = results[1]
+                else:
+                    print(f"JobRecommendationService: External jobs fetch failed: {results[1]}")
+            
+            # 3. Combine and sort by score
+            all_jobs = internal_jobs + external_jobs
+            all_jobs.sort(key=lambda x: x.get('match_score', 0), reverse=True)
+            
+            print(f"JobRecommendationService: Found {len(all_jobs)} total recommendations")
+            return all_jobs
+            
+        except Exception as e:
+            print(f"JobRecommendationService: Critical error in recommend_jobs: {e}")
+            return []

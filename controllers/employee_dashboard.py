@@ -136,20 +136,35 @@ class DashboardController:
         try:
             recruiter_id = data.recruiter_id
             employee_id = data.employee_id
+            
             if not recruiter_id or not employee_id:
                 raise HTTPException(
                     status_code=400, 
-                    detail="Both 'employee_id' and 'recruiter_id' are required"
+                    detail="Missing required information: 'employee_id' and 'recruiter_id' must be provided."
                 )
 
-
-            recommendation = JobRecommendationService()
-            recommendations = await recommendation.recommend_jobs(employee_id, recruiter_id)
-            print(recommendations,'recommendations')
-            return {"recommendations": recommendations}
+            recommendation_service = JobRecommendationService()
+            recommendations = await recommendation_service.recommend_jobs(employee_id, recruiter_id)
+            
+            if not recommendations:
+                return {
+                    "recommendations": [],
+                    "message": "We couldn't find any matching jobs at the moment. Try updating your profile or skills for better results."
+                }
+                
+            return {
+                "recommendations": recommendations,
+                "count": len(recommendations),
+                "status": "success"
+            }
+        except HTTPException as he:
+            raise he
         except Exception as e:
-            logger.error(f"Error in recommend: {str(e)}")
-            raise HTTPException(status_code=500, detail=str(e))
+            logger.error(f"Critical error in job recommendation: {str(e)}")
+            raise HTTPException(
+                status_code=500, 
+                detail="An unexpected error occurred while generating recommendations. Please try again later."
+            )
 
 
     @staticmethod

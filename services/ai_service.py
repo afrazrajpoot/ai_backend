@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional, Literal
 from datetime import datetime
 import asyncpg
+import asyncio
 from langchain_openai import ChatOpenAI
 from langchain.prompts import PromptTemplate
 from langchain.output_parsers import PydanticOutputParser
@@ -242,14 +243,26 @@ class AIService:
             )
             
             chain = prompt | llm | parser
-            analysis = await chain.ainvoke({
-                "scoring_guide": static_context.get("scoring_guide", ""),
-                "industry_mapping": static_context.get("industry_mapping", ""),
-                "assessment_payload": json.dumps(assessment_data, indent=2, default=str)
-            })
             
-            logger.info(f"First LLM extracted: {analysis.primary_genius_factor} with industries")
-            return analysis
+            # Retry logic for LLM call and parsing
+            max_retries = 3
+            last_error = None
+            for attempt in range(max_retries):
+                try:
+                    analysis = await chain.ainvoke({
+                        "scoring_guide": static_context.get("scoring_guide", ""),
+                        "industry_mapping": static_context.get("industry_mapping", ""),
+                        "assessment_payload": json.dumps(assessment_data, indent=2, default=str)
+                    })
+                    logger.info(f"First LLM extracted: {analysis.primary_genius_factor} with industries")
+                    return analysis
+                except Exception as e:
+                    last_error = e
+                    logger.warning(f"First LLM attempt {attempt + 1} failed: {str(e)}")
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep((attempt + 1) * 2)
+            
+            raise last_error
             
         except Exception as e:
             logger.error(f"Error in first LLM extraction: {str(e)}")
@@ -462,15 +475,27 @@ class AIService:
                 "assessment_payload": json.dumps(assessment_data, indent=2, default=str)[:3000]
             }
             
-            # Generate the report with Pydantic parser
-            report = await chain.ainvoke(inputs)
+            # Retry logic for LLM call and parsing
+            max_retries = 3
+            last_error = None
+            for attempt in range(max_retries):
+                try:
+                    # Generate the report with Pydantic parser
+                    report = await chain.ainvoke(inputs)
+                    
+                    logger.info(f"✅ Professional report generated with scores: "
+                               f"G={report.genius_factor_score}, "
+                               f"R={report.retention_risk_score}, "
+                               f"M={report.mobility_opportunity_score}")
+                    
+                    return report
+                except Exception as e:
+                    last_error = e
+                    logger.warning(f"Third LLM attempt {attempt + 1} failed: {str(e)}")
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep((attempt + 1) * 2)
             
-            logger.info(f"✅ Professional report generated with scores: "
-                       f"G={report.genius_factor_score}, "
-                       f"R={report.retention_risk_score}, "
-                       f"M={report.mobility_opportunity_score}")
-            
-            return report
+            raise last_error
             
         except Exception as e:
             logger.error(f"Error generating professional report: {str(e)}")
