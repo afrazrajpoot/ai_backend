@@ -53,7 +53,9 @@ class AssessmentController:
                 "development_action_plan",
                 "personalized_resources",
                 "data_sources_and_methodology",
-                "genius_factor_score"
+                "genius_factor_score",
+                "authentic_score",
+                "alignment_score"
             ]
             
             for section in required_sections:
@@ -84,8 +86,10 @@ class AssessmentController:
                     "analysis_summary": "Risk analysis completed",
                     "scores": {
                         "genius_factor_score": report.get("genius_factor_score", 75),
-                        "retention_risk_score": 50,
-                        "mobility_opportunity_score": 65
+                        "authentic_score": report.get("authentic_score", 85),
+                        "alignment_score": report.get("alignment_score", 80),
+                        "retention_risk_score": report.get("retention_risk_score", 50),
+                        "mobility_opportunity_score": report.get("mobility_opportunity_score", 65)
                     }
                 }
             
@@ -169,6 +173,8 @@ class AssessmentController:
             logger.info(f"💾 Saving report to database for user: {input_data['userId']}")
             logger.info(f"   - Department: {input_data['departement']}")
             logger.info(f"   - Genius Factor Score: {input_data['report']['genius_factor_score']}")
+            logger.info(f"   - Authentic Score: {input_data['report'].get('authentic_score')}")
+            logger.info(f"   - Alignment Score: {input_data['report'].get('alignment_score')}")
             logger.info(f"   - Executive Summary (first 100 chars): {input_data['report']['executive_summary'][:100]}...")
             
             # Execute the query

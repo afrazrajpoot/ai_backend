@@ -24,7 +24,7 @@ SELF_AWARENESS_FACTORS = {
         "Preference for hands-on and visual approaches",
         "Comfort with design and spatial challenges"
     ]},
-    "D": {"name": "Word/Spiritual Genius", "qualities": [
+    "D": {"name": "Spiritual/Word Genius", "qualities": [
         "Natural meaning-making and purpose-driven thinking",
         "Preference for values-based decisions",
         "Comfort with philosophical and communication challenges"
@@ -134,25 +134,36 @@ def categorize_part_name(part_name: str) -> str:
 
     # Use more specific Roman numeral patterns with word boundaries
     if ("self" in pn or "self-awareness" in pn or "self awareness" in pn
-            or "part i:" in pn or pn.startswith("part i ")):
+            or "part i:" in pn or pn.startswith("part i ") or "part 1" in pn):
         return "SelfAwareness"
 
     if ("talent" in pn or "talent audit" in pn
-            or "part ii:" in pn or pn.startswith("part ii ") or "part 2" in pn):
+            or "part ii:" in pn or pn.startswith("part ii ") or "part 2" in pn
+            or "talent assessment" in pn):
         return "Talent"
 
     if ("passion" in pn or "passion audit" in pn
-            or "part iii:" in pn or pn.startswith("part iii ") or "part 3" in pn):
+            or "part iii:" in pn or pn.startswith("part iii ") or "part 3" in pn
+            or "passion assessment" in pn):
         return "Passion"
 
     if ("mapping" in pn or "genius factor mapping" in pn
-            or "genius mapping" in pn
+            or "genius mapping" in pn or "identification scoring" in pn
+            or "identification mapping" in pn or "mapping scoring" in pn
+            or "identification key" in pn or "genius factor identification" in pn
             or "part iv:" in pn or pn.startswith("part iv ") or "part 4" in pn):
         return "Mapping"
 
     if ("goal" in pn or "career vision" in pn or "goal setting" in pn
-            or "part v:" in pn or pn.startswith("part v ") or "part 5" in pn):
+            or "part v:" in pn or pn.startswith("part v ") or "part 5" in pn
+            or "career goal" in pn):
         return "Goals"
+
+    # Fallback search for section Numbers if no text matches
+    if "part 4" in pn or "part iv" in pn or "mapping" in pn:
+        return "Mapping"
+    if "part 1" in pn or "part i" in pn or "self" in pn:
+        return "SelfAwareness"
 
     # Fallback: Mapping is the most detailed section; default there.
     logger.debug(f"categorize_part_name fallback for '{part_name}' -> Mapping")
@@ -192,14 +203,16 @@ def aggregate_parts_to_sections(parts_results: List[Dict[str,Any]]) -> Dict[str,
             logger.warning(f"Unexpected optionCounts type for part '{part_name}': {type(counts)}")
             continue
         section_key = categorize_part_name(part_name)
+        logger.debug(f"Categorized part '{part_name}' as '{section_key}'")
         # Add counts to section
         for letter, cnt in counts.items():
             try:
                 cnt_i = int(cnt)
+                letter_u = str(letter).strip().upper()
             except Exception:
-                logger.warning(f"Non-int count for {letter} in part '{part_name}': {cnt}")
+                logger.warning(f"Non-int count or invalid letter for {letter} in part '{part_name}': {cnt}")
                 continue
-            section_counts[section_key][letter] = section_counts[section_key].get(letter, 0) + cnt_i
+            section_counts[section_key][letter_u] = section_counts[section_key].get(letter_u, 0) + cnt_i
 
     # normalize to plain dicts
     return {k: dict(v) for k,v in section_counts.items()}
@@ -211,8 +224,9 @@ def determine_primary_secondary_from_mapping(mapping_counts: Dict[str,int]) -> T
     - Primary Genius Factor = Highest scoring factor from Q51-62
     - Secondary Genius Factor = Second highest scoring factor (if within 20% of primary)
     """
-    # convert to items sorted desc
-    items = sorted(mapping_counts.items(), key=lambda x: x[1], reverse=True)
+    # convert to items sorted desc, ensure uppercase keys
+    mapping_counts_u = {str(k).upper(): v for k, v in mapping_counts.items()}
+    items = sorted(mapping_counts_u.items(), key=lambda x: x[1], reverse=True)
     primary = []
     secondary = []
 
@@ -247,24 +261,21 @@ def determine_primary_secondary_from_mapping(mapping_counts: Dict[str,int]) -> T
     })
     logger.info(f"[GeniusMapping] Primary genius: {primary[0]}")
 
-    # Secondary factor: within 20% of primary (scoring guide requirement)
+    # Secondary factor: Take the second highest factor regardless of threshold to ensure one is always present
     if len(items) > 1:
         second_letter, second_count = items[1]
         second_percentage = (second_count / total_responses) * 100 if total_responses > 0 else 0
         
-        # Check if second is within 20% of primary
-        percentage_diff = top_percentage - second_percentage
-        if percentage_diff <= 20 and second_count > 0:
-            secondary.append({
-                "letter": second_letter,
-                "name": MAPPING_FACTORS.get(second_letter, {}).get("name", f"Factor {second_letter}"),
-                "count": second_count,
-                "percentage": round(second_percentage, 2),
-                "strength": strength_label(second_count, total_responses)
-            })
-            logger.info(f"[GeniusMapping] Secondary genius: {secondary[0]} (within 20% threshold)")
-        else:
-            logger.info(f"[GeniusMapping] No secondary genius (second factor {second_percentage:.2f}% vs primary {top_percentage:.2f}%, diff={percentage_diff:.2f}%)")
+        secondary.append({
+            "letter": second_letter,
+            "name": MAPPING_FACTORS.get(second_letter, {}).get("name", f"Factor {second_letter}"),
+            "count": second_count,
+            "percentage": round(second_percentage, 2),
+            "strength": strength_label(second_count, total_responses)
+        })
+        logger.info(f"[GeniusMapping] Secondary genius mandatory: {secondary[0]}")
+    else:
+        logger.warning("[GeniusMapping] No second factor available in items")
 
     return primary, secondary
 
@@ -315,8 +326,14 @@ def analyze_full_from_parts(parts_results: List[Dict[str,Any]]) -> Dict[str,Any]
     aggregate counts into sections, run per-section analysis, and compute final discovery metrics.
     """
     logger.info("Starting aggregation of parts into sections")
-    print(f'{parts_results} parts found')
+    available_parts = [p.get("part", "Unknown") for p in parts_results]
+    logger.info(f"Parts available for analysis: {available_parts}")
     section_counts = aggregate_parts_to_sections(parts_results)
+    
+    # Log the resulting section counts for debugging
+    for section, counts in section_counts.items():
+        if counts:
+            logger.info(f"Section '{section}' aggregated counts: {counts}")
 
     # Per-section analysis
     sections_analysis = {}
@@ -326,10 +343,16 @@ def analyze_full_from_parts(parts_results: List[Dict[str,Any]]) -> Dict[str,Any]
     sections_analysis["Mapping"] = analyze_section_counts("Genius Mapping", section_counts.get("Mapping", {}), MAPPING_FACTORS)
     sections_analysis["Goals"] = analyze_section_counts("Goals", section_counts.get("Goals", {}), MAPPING_FACTORS)
 
-    # Determine primary and secondary genius from mapping section
-    mapping_counts = section_counts.get("Mapping", {})
-    logger.info(f"[DeepAnalysis] Mapping section counts: {mapping_counts}")
-    primary, secondary = determine_primary_secondary_from_mapping(mapping_counts)
+    # Calculate total counts across ALL sections
+    total_counts = Counter()
+    for section, counts in section_counts.items():
+        for letter, cnt in counts.items():
+            total_counts[letter] += cnt
+    
+    logger.info(f"[DeepAnalysis] Total counts across all sections: {total_counts}")
+    
+    # Determine primary and secondary genius from TOTAL counts (all parts)
+    primary, secondary = determine_primary_secondary_from_mapping(dict(total_counts))
 
     # Attach qualities to primary and secondary genius
     def get_qualities(letter):
@@ -341,32 +364,9 @@ def analyze_full_from_parts(parts_results: List[Dict[str,Any]]) -> Dict[str,Any]
     for s in secondary:
         s["qualities"] = get_qualities(s["letter"])
 
-    mapping_total = sum(mapping_counts.values())
-    logger.info(f"[DeepAnalysis] Mapping section total responses: {mapping_total}")
+    total_responses = sum(total_counts.values())
+    logger.info(f"[DeepAnalysis] Total responses across all sections: {total_responses}")
     
-    # Only fallback if mapping section is completely empty
-    if mapping_total == 0:
-        logger.info("[DeepAnalysis] No mapping responses found; falling back to Self-Awareness for primary detection")
-        sa_counts = section_counts.get("SelfAwareness", {})
-        logger.info(f"[DeepAnalysis] SelfAwareness fallback counts: {sa_counts}")
-        if sa_counts:
-            primary_letters = sorted(sa_counts.items(), key=lambda x: x[1], reverse=True)[:2]
-            primary = [{
-                "letter": l, "name": SELF_AWARENESS_FACTORS.get(l, {}).get("name", f"Factor {l}"),
-                "count": c, "strength": "Fallback",
-                "qualities": get_qualities(l)
-            } for l,c in primary_letters if c > 0]
-            logger.info(f"[DeepAnalysis] Fallback primary from Self-Awareness: {primary}")
-        else:
-            logger.warning("[DeepAnalysis] No Self-Awareness data available for fallback")
-    else:
-        logger.info(f"[DeepAnalysis] Using Mapping section for genius detection: Primary={primary}, Secondary={secondary}")
-        # Add qualities to primary and secondary from mapping
-        for p in primary:
-            p["qualities"] = get_qualities(p["letter"])
-        for s in secondary:
-            s["qualities"] = get_qualities(s["letter"])
-
     # Talent-Passion alignment (numeric overlap)
     talent_counts = section_counts.get("Talent", {})
     passion_counts = section_counts.get("Passion", {})
@@ -397,7 +397,7 @@ def analyze_full_from_parts(parts_results: List[Dict[str,Any]]) -> Dict[str,Any]
 
     # Confidence level calculation (from scoring guide)
     confidence_level = "Unknown"
-    if mapping_total > 0 and len(primary) > 0:
+    if total_responses > 0 and len(primary) > 0:
         top_pct = primary[0].get("percentage", 0)
         logger.info(f"[DeepAnalysis] Confidence calc: primary percentage={top_pct:.2f}%")
         
@@ -412,7 +412,7 @@ def analyze_full_from_parts(parts_results: List[Dict[str,Any]]) -> Dict[str,Any]
         
         logger.info(f"[DeepAnalysis] Confidence level: {confidence_level} (based on {top_pct:.2f}%)")
     else:
-        logger.info(f"[DeepAnalysis] Cannot calculate confidence: mapping_total={mapping_total}, primary_count={len(primary)}")
+        logger.info(f"[DeepAnalysis] Cannot calculate confidence: total_responses={total_responses}, primary_count={len(primary)}")
 
     # Talent-Passion alignment label
     alignment_label = "Low"

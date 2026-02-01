@@ -101,10 +101,10 @@ class ProfessionalAssessmentReport(BaseModel):
     """Complete professional assessment report from THIRD LLM"""
     executive_summary: str = Field(description="3-4 paragraph executive summary")
     
-    # Core Scores
-    genius_factor_score: int = Field(description="Genius Factor Score (0-100)", ge=0, le=100)
-    retention_risk_score: int = Field(description="Retention Risk Score (0-100)", ge=0, le=100)
-    mobility_opportunity_score: int = Field(description="Mobility Opportunity Score (0-100)", ge=0, le=100)
+    # Core Scores (Generated as Integers)
+    genius_factor_score: int = Field(description="Genius Factor Score (0-100) based on response consistency and pattern dominance", ge=0, le=100)
+    retention_risk_score: int = Field(description="Retention Risk Score (0-100) based on role alignment and market factors", ge=0, le=100)
+    mobility_opportunity_score: int = Field(description="Mobility Opportunity Score (0-100) based on internal career paths", ge=0, le=100)
     
     # Detailed Sections
     genius_factor_profile: GeniusFactorProfile = Field(description="Genius factor profile")
@@ -194,8 +194,8 @@ class AIService:
                 await conn.close()
 
     @classmethod
-    async def _first_llm_extract_static_info(cls, assessment_data: Dict) -> StaticContextAnalysis:
-        """FIRST LLM: Extract genius factors and related info from static context"""
+    async def _first_llm_extract_static_info(cls, assessment_data: Dict, analysis_summary: str = "") -> StaticContextAnalysis:
+        """FIRST LLM: Extract genius factors and related info from static context using algorithmic findings"""
         try:
             llm = ChatOpenAI(
                 api_key=settings.OPENAI_API_KEY,
@@ -224,9 +224,13 @@ class AIService:
                 {assessment_payload}
                 =====================================
 
+                ========== ALGORITHMIC ANALYSIS RESULTS ==========
+                {analysis_summary}
+                =================================================
+
                 **YOUR TASK: Extract relevant static context for this user:**
-                1. **ANALYZE** assessment responses to determine genius factor patterns
-                2. **IDENTIFY** which genius factors from static context match (Tech, Social, Visual, Word, etc.)
+                1. **VERIFY** dominant patterns based on THE ALGORITHMIC RESULTS ABOVE.
+                2. **IDENTIFY** which genius factors from static context match the PRIMARY and SECONDARY factors found by the algorithm.
                 3. **EXTRACT** the scoring guide sections for THOSE specific genius factors
                 4. **EXTRACT** the industry mapping for THOSE specific genius factors
                 5. **EXTRACT** the list of "Primary Industries" for the identified genius factor
@@ -238,7 +242,7 @@ class AIService:
 
                 {format_instructions}
                 """,
-                input_variables=["scoring_guide", "industry_mapping", "assessment_payload"],
+                input_variables=["scoring_guide", "industry_mapping", "assessment_payload", "analysis_summary"],
                 partial_variables={"format_instructions": parser.get_format_instructions()}
             )
             
@@ -252,7 +256,8 @@ class AIService:
                     analysis = await chain.ainvoke({
                         "scoring_guide": static_context.get("scoring_guide", ""),
                         "industry_mapping": static_context.get("industry_mapping", ""),
-                        "assessment_payload": json.dumps(assessment_data, indent=2, default=str)
+                        "assessment_payload": json.dumps(assessment_data, indent=2, default=str),
+                        "analysis_summary": analysis_summary
                     })
                     logger.info(f"First LLM extracted: {analysis.primary_genius_factor} with industries")
                     return analysis
@@ -273,7 +278,8 @@ class AIService:
         cls, 
         static_analysis: StaticContextAnalysis,
         user_data: Dict,
-        assessment_data: Dict
+        assessment_data: Dict,
+        analysis_data: str = ""
     ) -> ProfessionalAssessmentReport:
         """THIRD LLM: Generate complete professional report using Pydantic parser"""
         try:
@@ -330,6 +336,10 @@ class AIService:
             prompt = PromptTemplate(
                 template=system_prompt + """
                 
+                ========== ANALYSIS SUMMARY ==========
+                {analysis_data}
+                ======================================
+
                 ========== STATIC CONTEXT INFORMATION ==========
                 **GENIUS FACTORS IDENTIFIED:**
                 - Primary: {primary_factor}
@@ -412,21 +422,23 @@ class AIService:
                    - 3-4 six-month goals with career progression
                    - Networking strategy with specific steps
 
-                7. **PERSONALIZED RESOURCES** (Complete):
-                   - 4-5 affirmations specific to genius factors
-                   - 4-5 learning resources (courses, books, certifications)
+                7. **PERSONALIZED RESOURCES** (MANDATORY - DO NOT LEAVE EMPTY):
+                   - 4-5 affirmations specific to the identified genius factors
+                   - 4-5 learning resources (EXACT titles of actual courses, books, or specific certifications)
                    - 3-4 reflection questions for self-assessment
                    - 3-4 mindfulness practices for career development
+                   - **IMPORTANT**: This section MUST contain real data and actionable recommendations. Placeholder text or generic descriptions are UNACCEPTABLE.
 
                 8. **DATA SOURCES & METHODOLOGY** (Transparent):
                    - Document what data was used
                    - Explain methodology of analysis
                    - Describe how scores were calculated
 
-                **SCORES TO CALCULATE (Based on analysis of all provided data):**
-                1. **Genius Factor Score (0-100)**: Calculate based on how strongly the assessment responses match the identified genius factors. Consider pattern consistency and alignment.
-                2. **Retention Risk Score (0-100)**: Calculate based on alignment between user's current role and identified genius factors. Consider position match, skills utilization, and satisfaction indicators.
-                3. **Mobility Opportunity Score (0-100)**: Calculate based on the number and quality of internal opportunities in identified industries. Consider industry growth, skill match, and career progression potential.
+                **SCORES TO CALCULATE (MUST BE DATA-DRIVEN):**
+                
+                1. **Genius Factor Score (0-100)**: Analyze the **options and selected answers**. Calculate based on response consistency across sections and pattern dominance. High consistency across all 5 sections = higher score. Penalty for contradictory answers.
+                2. **Retention Risk Score (0-100)**: Calculate based on alignment between user's **Current Position** and their identified **Genius Factor**. High risk if mismatched, low risk if perfectly aligned.
+                3. **Mobility Opportunity Score (0-100)**: Calculate based on internal transfer options and industry trends identified in the analysis.
 
                 **IMPORTANT:** Calculate scores based on ALL provided data - assessment patterns, user profile, static context insights, and industry mapping.
 
@@ -448,7 +460,8 @@ class AIService:
                     "user_skills",
                     "user_experience",
                     "user_education",
-                    "assessment_payload"
+                    "assessment_payload",
+                    "analysis_data"
                 ],
                 partial_variables={"format_instructions": parser.get_format_instructions()}
             )
@@ -472,7 +485,8 @@ class AIService:
                 "user_skills": user_skills,
                 "user_experience": user_experience,
                 "user_education": user_education,
-                "assessment_payload": json.dumps(assessment_data, indent=2, default=str)[:3000]
+                "assessment_payload": json.dumps(assessment_data, indent=2, default=str)[:3000],
+                "analysis_data": analysis_data
             }
             
             # Retry logic for LLM call and parsing
@@ -503,11 +517,26 @@ class AIService:
 
     @classmethod
     async def analyze_majority_answers(cls, basic_results: List[Dict[str, Any]], deep_results: Dict[str, Any]) -> str:
-        """Compatibility method"""
+        """Improve RAG summary with detailed metrics from deep analysis"""
         try:
             primary_genius = deep_results.get("primary_genius", [])
             primary_factor = primary_genius[0]["name"] if primary_genius and len(primary_genius) > 0 else "Unknown"
-            return f"Analysis indicates {primary_factor} as primary genius factor."
+            
+            secondary_genius = deep_results.get("secondary_genius", [])
+            secondary_factor = secondary_genius[0]["name"] if secondary_genius and len(secondary_genius) > 0 else "None"
+            
+            overlap = deep_results.get("talent_passion_overlap_pct", 0)
+            confidence = deep_results.get("confidence_level", "Unknown")
+            hybrid = deep_results.get("hybrid_classification", "None")
+            
+            summary = (
+                f"PRIMARY GENIUS: {primary_factor} (Dominance: {primary_genius[0].get('percentage', 0) if primary_genius else 0}%)\n"
+                f"SECONDARY GENIUS: {secondary_factor}\n"
+                f"TALENT-PASSION OVERLAP: {overlap:.1f}%\n"
+                f"ASSESSMENT CONFIDENCE: {confidence}\n"
+                f"HYBRID CLASSIFICATION: {hybrid}\n"
+            )
+            return summary
         except Exception as e:
             logger.error(f"Error in analyze_majority_answers: {str(e)}")
             return "Analysis completed."
@@ -531,14 +560,15 @@ class AIService:
             
             # --- STEP 1: Extract genius factors and related info from static context ---
             logger.info("Step 1: Extracting static context info with Pydantic parser...")
-            static_analysis = await cls._first_llm_extract_static_info(payload_data)
+            static_analysis = await cls._first_llm_extract_static_info(payload_data, analysis_summary=analysis_result)
             
             # --- STEP 2: Generate complete professional report with Pydantic parser ---
             logger.info("Step 2: Generating professional report with Pydantic parser...")
             report = await cls._third_llm_generate_professional_report(
                 static_analysis,
                 user_data,
-                payload_data
+                payload_data,
+                analysis_data=analysis_result
             )
             
             # Convert report to dict for database compatibility
