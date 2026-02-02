@@ -55,6 +55,7 @@ model User {
   appliedJobIds String[]
 
   orders        Order[]
+  joinedCommunity Boolean @default(false)
   
   @@map("users")
 }
