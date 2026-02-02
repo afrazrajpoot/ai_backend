@@ -55,7 +55,7 @@ class AgentState(TypedDict):
 class JobRecommenderAgent:
     def __init__(self):
         try:
-            self.llm = ChatOpenAI(model="gpt-4o", temperature=0) # Use a stronger model for planning
+            self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0) # Use a faster model for planning
             self.embeddings = OpenAIEmbeddings()
             self.internal_fetcher = InternalJobFetcher(self.embeddings)
             self.external_fetcher = ExternalJobFetcher()
@@ -164,7 +164,7 @@ class JobRecommenderAgent:
 
         prompt = PromptTemplate(
             input_variables=["user_profile", "location"],
-            template="""You are an expert Career Strategist. Analyze the following user profile to plan a job search strategy.
+            template="""You are an expert Career Strategist. Analyze the following user profile to act as a Job Search Engine.
             
             USER PROFILE:
             {user_profile}
@@ -173,22 +173,19 @@ class JobRecommenderAgent:
             {location}
             
             TASK:
-            1. AUDIT: Perform a mandatory check of ALL skills provided in the USER PROFILE.
-            2. CLUSTER: Identify ALL distinct skill clusters. (e.g., Web Development, Data Science, Backend/Java, Creative/Design, Video Editing, etc.).
-            3. DISTRIBUTE: Generate 3 targeted search queries. 
-               - CRITICAL RULE: You MUST allocate queries across the most important skill clusters. 
-               - PROPORTIONALITY: Do not let one cluster take up more than 2 queries. 
-               - COVERAGE: Focus on the primary skills.
-               - Each query should contain a skill and a job title.
-               - If location is "{location}" and it equals "Global", ignore it or use "Remote".
-               - Otherwise, include the "{location}" in the queries where appropriate.
+            1. ANALYZE: Identify the user's primary professional role (e.g., "Frontend Developer", "Accountant", "DevOps Engineer") based on their skills.
+            2. CONSOLIDATE: Instead of searching for individual skills (like 'React', 'HTML', 'JS'), create ONE "Master Query" that covers the role.
+            3. CREATE QUERY: Generate 1 (and ONLY 1) highly optimized search query.
+               - Format: "[Role Title] jobs in [Location]"
+               - Determine the Role Title by looking at the strongest skill cluster.
+               - If location is "{location}" and it equals "Global", use "Remote".
+               - Otherwise, include the "{location}".
             
             FORMAT:
             Return a JSON object:
             {{
-                "strategy": "Analysis of how their skills and experience align with market opportunities",
-                "target_roles": ["Role 1", "Role 2"],
-                "search_queries": ["Query 1", "Query 2", ...]
+                "strategy": "Brief reasoning for the role title selection",
+                "search_queries": ["Master Query"]
             }}
             """
         )
@@ -237,7 +234,7 @@ class JobRecommenderAgent:
             # Parallel tasks
             tasks = [
                 self.internal_fetcher.fetch_jobs(queries[0] if queries else "", recruiter_id),
-                self.external_fetcher.fetch_with_queries(queries[:3], skills) # Reduced to 3 queries for speed
+                self.external_fetcher.fetch_with_queries(queries[:1], skills) # Strictly 1 query for maximum speed
             ]
             
             results = await asyncio.gather(*tasks)
@@ -289,8 +286,8 @@ class JobRecommenderAgent:
         try:
             # Prepare jobs preview for LLM
             jobs_preview = "\n".join([
-                f"ID: {j['id']} | Title: {j['title']} | Co: {j['company']} | Loc: {j['location']} | Sal: {j.get('salary', 'N/A')} | Full_Text: {j['description'][:400]}"
-                for j in jobs[:20] # Reduced to score top 20 for speed
+                f"ID: {j['id']} | Title: {j['title']} | Co: {j['company']} | Loc: {j['location']} | Sal: {j.get('salary', 'N/A')} | Full_Text: {j['description'][:300]}"
+                for j in jobs[:10] # Reduced to top 10 for speed
             ])
 
             parser = PydanticOutputParser(pydantic_object=JobRankingList)

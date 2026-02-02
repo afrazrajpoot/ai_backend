@@ -196,8 +196,8 @@ class ExternalJobFetcher:
     using Tavily search and LLM-based extraction.
     """
     def __init__(self):
-        self.tavily = TavilySearchResults(max_results=20)
-        self.llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0.2)
+        self.tavily = TavilySearchResults(max_results=5)
+        self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2)
         
         # --- Prompts ---
         self.query_gen_prompt = PromptTemplate(

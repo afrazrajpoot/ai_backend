@@ -24,7 +24,7 @@ class JobRecommendationService:
     """
     def __init__(self):
         self.embeddings = OpenAIEmbeddings()
-        self.llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
+        self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
         
         # Initialize our tools
         self.internal_fetcher = InternalJobFetcher(self.embeddings)
