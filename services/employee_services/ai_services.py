@@ -13,6 +13,7 @@ from langchain.chains import LLMChain
 
 # Import our new tools
 from .job_tools import InternalJobFetcher, ExternalJobFetcher
+from .job_recommender_agent import JobRecommenderAgent
 
 class JobRecommendationService:
     """
@@ -28,6 +29,7 @@ class JobRecommendationService:
         # Initialize our tools
         self.internal_fetcher = InternalJobFetcher(self.embeddings)
         self.external_fetcher = ExternalJobFetcher()
+        self.agent = JobRecommenderAgent()
         
         # Prompt for scoring jobs against user profile
         self.scoring_prompt = PromptTemplate(
@@ -50,7 +52,7 @@ CRITERIA:
 Return ONLY a JSON object: {{"Job Title": 85, ...}}
 """
         )
-        self.scoring_chain = LLMChain(llm=self.llm, prompt=self.scoring_prompt)
+        self.scoring_chain = self.scoring_prompt | self.llm
 
     async def _fetch_and_parse_user(self, user_id: str) -> Optional[Dict[str, Any]]:
         """Fetch user data and parse JSON fields."""
@@ -125,12 +127,16 @@ Return ONLY a JSON object: {{"Job Title": 85, ...}}
         try:
             # Run the synchronous chain in a thread
             response = await asyncio.to_thread(
-                self.scoring_chain.run,
-                user_skills=", ".join(user_skills[:10]),
-                user_positions=", ".join(user_positions[:5]),
-                jobs_list=jobs_text
+                self.scoring_chain.invoke,
+                {
+                    "user_skills": ", ".join(user_skills[:10]),
+                    "user_positions": ", ".join(user_positions[:5]),
+                    "jobs_list": jobs_text
+                }
             )
-            scores = self._extract_json_from_response(response)
+            # Handle both string and AIMessage responses
+            content = response.content if hasattr(response, 'content') else str(response)
+            scores = self._extract_json_from_response(content)
             
             results = []
             for d in job_docs:
@@ -140,8 +146,8 @@ Return ONLY a JSON object: {{"Job Title": 85, ...}}
                     score = scores[title]
                 else:
                     # Fallback scoring
-                    content = d.page_content.lower()
-                    matches = sum(1 for s in user_skills if s.lower() in content)
+                    content_lower = d.page_content.lower()
+                    matches = sum(1 for s in user_skills if s.lower() in content_lower)
                     score = min(matches * 15 + 50, 90)
                 
                 results.append({
@@ -152,12 +158,10 @@ Return ONLY a JSON object: {{"Job Title": 85, ...}}
             return results
             
         except Exception as e:
-            print(f"Error scoring jobs: {e}")
             return [{'title': d.metadata.get('title'), 'match_score': 50.0, 'document': d} for d in job_docs]
 
     async def get_internal_jobs(self, user_id: str, recruiter_id: str, user_data: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         """Get and score internal jobs."""
-        print(f"JobRecommendationService: Getting INTERNAL jobs for {user_id}")
         
         if not user_data:
             user_data = await self._fetch_and_parse_user(user_id)
@@ -172,7 +176,6 @@ Return ONLY a JSON object: {{"Job Title": 85, ...}}
         try:
             candidates = await self.internal_fetcher.fetch_jobs(query, recruiter_id)
         except Exception as e:
-            print(f"JobRecommendationService: Error fetching internal jobs: {e}")
             return []
         
         if not candidates: return []
@@ -210,7 +213,6 @@ Return ONLY a JSON object: {{"Job Title": 85, ...}}
 
     async def get_external_jobs(self, user_id: str, user_data: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         """Get and score external jobs."""
-        print(f"JobRecommendationService: Getting EXTERNAL jobs for {user_id}")
         
         if not user_data:
             user_data = await self._fetch_and_parse_user(user_id)
@@ -224,7 +226,6 @@ Return ONLY a JSON object: {{"Job Title": 85, ...}}
         try:
             external_jobs = await self.external_fetcher.fetch_external_jobs(skills, positions)
         except Exception as e:
-            print(f"JobRecommendationService: Error fetching external jobs: {e}")
             return []
             
         if not external_jobs: return []
@@ -247,14 +248,31 @@ Return ONLY a JSON object: {{"Job Title": 85, ...}}
         return external_jobs
 
     async def recommend_jobs(self, user_id: str, recruiter_id: str, include_external: bool = True) -> List[Dict[str, Any]]:
-        """Get recommendations from all sources in parallel."""
-        print(f"JobRecommendationService: Generating recommendations for user {user_id}...")
+        """Get recommendations using the professional LangGraph agent."""
         
+        try:
+            # Use the new agentic system
+            recommendations = await self.agent.get_recommendations(user_id, recruiter_id)
+            
+            # Filter external if requested (though agent usually includes them)
+            if not include_external:
+                recommendations = [j for j in recommendations if not j.get('is_external', False)]
+                
+            return recommendations
+            
+        except Exception as e:
+            print(f"\n[AGENT ERROR] Critical failure in agentic recommend_jobs: {e}")
+            import traceback
+            traceback.print_exc()
+            # Fallback to the old method or manual fetch if agent fails
+            return await self._fallback_recommend_jobs(user_id, recruiter_id, include_external)
+
+    async def _fallback_recommend_jobs(self, user_id: str, recruiter_id: str, include_external: bool = True) -> List[Dict[str, Any]]:
+        """Legacy parallel fetch logic as a fallback."""
         try:
             # 1. Fetch user data once
             user_data = await self._fetch_and_parse_user(user_id)
             if not user_data:
-                print(f"JobRecommendationService: User {user_id} not found")
                 return []
             
             # 2. Run internal and external fetches in parallel
@@ -264,28 +282,12 @@ Return ONLY a JSON object: {{"Job Title": 85, ...}}
             
             results = await asyncio.gather(*tasks, return_exceptions=True)
             
-            internal_jobs = []
-            external_jobs = []
+            internal_jobs = results[0] if isinstance(results[0], list) else []
+            external_jobs = results[1] if len(results) > 1 and isinstance(results[1], list) else []
             
-            if len(results) > 0:
-                if isinstance(results[0], list):
-                    internal_jobs = results[0]
-                else:
-                    print(f"JobRecommendationService: Internal jobs fetch failed: {results[0]}")
-            
-            if len(results) > 1:
-                if isinstance(results[1], list):
-                    external_jobs = results[1]
-                else:
-                    print(f"JobRecommendationService: External jobs fetch failed: {results[1]}")
-            
-            # 3. Combine and sort by score
             all_jobs = internal_jobs + external_jobs
             all_jobs.sort(key=lambda x: x.get('match_score', 0), reverse=True)
-            
-            print(f"JobRecommendationService: Found {len(all_jobs)} total recommendations")
             return all_jobs
-            
         except Exception as e:
-            print(f"JobRecommendationService: Critical error in recommend_jobs: {e}")
+            print(f"Error in fallback: {e}")
             return []

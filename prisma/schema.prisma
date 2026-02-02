@@ -130,6 +130,7 @@ model Employee {
   firstName     String
   lastName      String
   address       String?
+  nearbyArea    String?
   dateOfBirth   DateTime?
   hireDate      DateTime?
   manager       String?
@@ -272,7 +273,6 @@ model EmployeeChat {
   message   String
   response  String?
   createdAt DateTime @default(now())
-
 }
 
 model SubscriptionAttempt {
@@ -306,3 +306,4 @@ model Order {
 
   @@map("orders")
 }
+

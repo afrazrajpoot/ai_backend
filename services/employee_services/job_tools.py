@@ -81,7 +81,6 @@ class JobVectorStore:
 
         # Fetch all jobs from the database
         jobs = await db.job.find_many()
-        print(f"JobVectorStore: Total jobs in database: {len(jobs)}")
         
         docs: List[Document] = [
             self._job_to_document(JobRow(
@@ -94,20 +93,17 @@ class JobVectorStore:
         if docs:
             self.vs = FAISS.from_documents(docs, self.embeddings)
             self.vs.save_local(INDEX_DIR)
-            print(f"JobVectorStore: FAISS index created with {len(docs)} documents")
         else:
             self.vs = FAISS.from_texts(["NO_JOBS"], self.embeddings)
-            print("JobVectorStore: FAISS index created with placeholder (no jobs in DB)")
 
         self._loaded = True
 
     def retrieve_jobs_with_scores(self, query_text: str, recruiter_id: str, k: int = TOP_K) -> List[Dict[str, Any]]:
         """Search the vector store for jobs matching the query."""
         if not self.vs:
-            print("JobVectorStore: Store not initialized")
             return []
         
-        print(f"JobVectorStore: Searching for '{query_text}' (Recruiter: {recruiter_id or 'Any'})")
+        
         
         try:
             results = self.vs.similarity_search_with_score(query_text, k=k)
@@ -129,7 +125,6 @@ class JobVectorStore:
             return scored_jobs
             
         except Exception as e:
-            print(f"JobVectorStore: Error in search: {e}")
             return []
 
 
@@ -156,7 +151,6 @@ class InternalJobFetcher:
             
             # If no results for specific recruiter, try global search (fallback)
             if not embedding_scored and recruiter_id:
-                print("InternalJobFetcher: No jobs for specific recruiter, searching all...")
                 embedding_scored = self.vstore.retrieve_jobs_with_scores(query, "")
             
             if not embedding_scored:
@@ -188,11 +182,9 @@ class InternalJobFetcher:
                     "vector_score": vector_info['match_score']
                 })
                 
-            print(f"InternalJobFetcher: Found {len(results)} jobs")
             return results
             
         except Exception as e:
-            print(f"InternalJobFetcher: Error fetching jobs: {e}")
             return []
         finally:
             await db.disconnect()
@@ -204,7 +196,7 @@ class ExternalJobFetcher:
     using Tavily search and LLM-based extraction.
     """
     def __init__(self):
-        self.tavily = TavilySearchResults(max_results=8)
+        self.tavily = TavilySearchResults(max_results=20)
         self.llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0.2)
         
         # --- Prompts ---
@@ -264,7 +256,7 @@ Instructions:
             if queries and isinstance(queries, list):
                 return queries[:5]
         except Exception as e:
-            print(f"ExternalJobFetcher: Error generating queries: {e}")
+            pass
         
         # Fallback
         return [f"{' '.join(positions[:1])} {' '.join(skills[:3])} jobs"]
@@ -272,16 +264,9 @@ Instructions:
     def _fetch_with_query(self, query: str, site: str, target_skills: List[str]) -> List[Dict[str, Any]]:
         """Search a specific site with a query."""
         site_query = f"{query} site:{site}"
-        print(f"  ExternalJobFetcher: Searching {site} for '{query}'")
 
         try:
             raw_results = self.tavily.invoke({"query": site_query})
-
-            # Log raw data from web search
-            print(f"  ExternalJobFetcher: Raw results from {site} (count: {len(raw_results) if raw_results else 0}):")
-            if raw_results and isinstance(raw_results, list):
-                for i, result in enumerate(raw_results[:3]):  # Log first 3 results
-                    print(f"    Result {i+1}: {result}")
 
             if not raw_results or not isinstance(raw_results, list):
                 return []
@@ -303,7 +288,7 @@ Instructions:
             
             extracted = self._extract_json_from_response(response.content)
             if not extracted or not isinstance(extracted, list):
-                return []
+                extracted = []
 
             # Create jobs using raw data titles instead of LLM extracted titles
             formatted_jobs = []
@@ -357,23 +342,26 @@ Instructions:
             return formatted_jobs
 
         except Exception as e:
-            print(f"  ExternalJobFetcher: Error searching {site}: {e}")
             return []
 
     async def fetch_external_jobs(self, skills: List[str], positions: List[str]) -> List[Dict[str, Any]]:
-        """Main method to fetch external jobs."""
-        import asyncio
-        print(f"ExternalJobFetcher: Starting search for skills={skills}, positions={positions}")
-
+        """Main method to fetch external jobs (generates queries first)."""
         queries = self._generate_search_queries(skills, positions)
+        return await self.fetch_with_queries(queries, skills)
+
+    async def fetch_with_queries(self, queries: List[str], target_skills: List[str]) -> List[Dict[str, Any]]:
+        """Fetch external jobs using pre-generated queries."""
+        import asyncio
+
         sites = ["indeed.com", "linkedin.com/jobs", "glassdoor.com"]
         
         # Create tasks for parallel execution
         tasks = []
-        for i, site in enumerate(sites):
-            query = queries[i] if i < len(queries) else queries[0]
+        for i, query in enumerate(queries):
+            # Rotate through sites for each query
+            site = sites[i % len(sites)]
             # We need to run the synchronous _fetch_with_query in a thread to avoid blocking
-            tasks.append(asyncio.to_thread(self._fetch_with_query, query, site, skills))
+            tasks.append(asyncio.to_thread(self._fetch_with_query, query, site, target_skills))
         
         # Run all searches in parallel
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -388,28 +376,10 @@ Instructions:
                         seen_titles.add(job['title'])
                         all_jobs.append(job)
             elif isinstance(jobs, Exception):
-                print(f"ExternalJobFetcher: Search task failed: {jobs}")
+                pass
 
-        print(f"ExternalJobFetcher: Total found: {len(all_jobs)}")
 
         if not all_jobs:
-            return self._create_skill_based_fallback(skills)
+            return []
 
         return all_jobs
-
-    def _create_skill_based_fallback(self, skills: List[str]) -> List[Dict[str, Any]]:
-        """Generate fallback jobs if none found."""
-        return [{
-            "id": f"fallback_{i}",
-            "title": f"{skill} Specialist",
-            "company": "Tech Company",
-            "description": f"Looking for an expert in {skill}.",
-            "location": "Remote",
-            "type": "Full-time",
-            "url": "#",
-            "required_skills": [skill],
-            "recruiterId": "external",
-            "match_score": 70.0,
-            "is_external": True,
-            "source": "skill_based_fallback"
-        } for i, skill in enumerate(skills[:3])]
