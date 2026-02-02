@@ -40,6 +40,7 @@ class AgentState(TypedDict):
     user_data: Dict[str, Any]
     assessment_data: Dict[str, Any]
     nearby_area: str
+    exclude_ids: List[str]
     # Process
     planning_strategy: str
     search_queries: List[str]
@@ -278,51 +279,54 @@ class JobRecommenderAgent:
         jobs = state.get("combined_results", [])
         assessment = state.get("assessment_data", {})
         strategy = state.get("planning_strategy", "")
+        exclude_ids = set(state.get("exclude_ids", []))
+        
+        # Filter out excluded jobs
+        jobs = [j for j in jobs if j.get("id") not in exclude_ids]
         
         if state.get("status") == "failed" or not jobs:
             print(f"[AGENT DEBUG] Skipping ranking: status={state.get('status')}, jobs count={len(jobs)}")
             return {"final_recommendations": jobs, "status": "completed_no_results"}
 
         try:
-            # Prepare jobs preview for LLM
+            # OPTIMIZATION: Process only top 7 candidates to reduce latency
+            candidates = jobs[:7]
+            
+            # Prepare minimal context for speed
             jobs_preview = "\n".join([
-                f"ID: {j['id']} | Title: {j['title']} | Co: {j['company']} | Loc: {j['location']} | Sal: {j.get('salary', 'N/A')} | Full_Text: {j['description'][:300]}"
-                for j in jobs[:10] # Reduced to top 10 for speed
+                f"ID: {j['id']} | Title: {j['title']} | Co: {j['company']} | Loc: {j['location']} | Text: {j['description'][:200]}"
+                for j in candidates
             ])
 
-            parser = PydanticOutputParser(pydantic_object=JobRankingList)
-
+            # Use a simpler, faster prompt without strict Pydantic parsing
             prompt = PromptTemplate(
                 input_variables=["strategy", "user_profile", "jobs_list"],
-                template="""You are a Professional Career Advisor. Score and rank the following jobs based strictly on the user's PROFILE (Skills, Experience, Bio).
+                template="""Rank these jobs for the user.
                 
-                CAREER STRATEGY:
-                {strategy}
-                
-                USER PROFILE:
-                {user_profile}
-                
-                JOBS LIST:
+                STRATEGY: {strategy}
+                PROFILE: {user_profile}
+                JOBS:
                 {jobs_list}
                 
-                TASK:
-                1. Evaluate each job's alignment based on:
-                   - SKILL MATCH: How well the job requirements match the user's technical skills.
-                   - EXPERIENCE MATCH: How well the seniority and responsibilities match the user's background.
-                2. Calculate a 0-100 score based on overall profile alignment.
-                3. CRITICAL: Ensure the final ranked list is DIVERSE. Do not fill the list with only one type of job (e.g., only React). If the user has multiple skill clusters (like Web and Data Science), include the best matches from EACH cluster in the top 10.
-                4. Extract and refine the following fields:
-                   - TITLE: Use the EXACT title provided in the JOBS LIST. Do not "clean" or change it.
-                   - COMPANY: Find the actual company name from the Full_Text (essential if Co is 'Unknown').
-                   - SALARY: Look for currency symbols or 'k' notations in the text.
-                   - LOCATION: Be as specific as possible.
-                   - DESCRIPTION: Write a professional 2-sentence summary of the actual role.
-                5. Provide a brief "Why this fits" reason for the top 5 jobs.
-                6. {format_instructions}
+                Task:
+                1. Score each job (0-100) on Skill & Experience match.
+                2. Return a valid JSON array of objects.
                 
-                Return only the top 10 jobs in ranked order.
-                """,
-                partial_variables={"format_instructions": parser.get_format_instructions()}
+                Format:
+                [
+                    {{
+                        "id": "job_id",
+                        "match_score": 85,
+                        "reason": "Why it fits",
+                        "refined_title": "Clean Title",
+                        "refined_company": "Company Name",
+                        "refined_location": "Location",
+                        "refined_salary": "Salary or N/A"
+                    }}
+                ]
+                
+                Return ONLY the JSON array.
+                """
             )
 
             chain = prompt | self.llm
@@ -333,41 +337,39 @@ class JobRecommenderAgent:
             })
 
             content = response.content if hasattr(response, 'content') else str(response)
-            parsed_output = parser.parse(self._extract_json(content))
-            rankings_map = {r.id: r for r in parsed_output.rankings}
+            clean_json = self._extract_json(content)
+            rankings = json.loads(clean_json)
+            
+            rankings_map = {r.get("id"): r for r in rankings if isinstance(r, dict)}
             
             final_recommendations = []
-            for j in jobs:
+            for j in candidates:
                 if j["id"] in rankings_map:
                     ranking = rankings_map[j["id"]]
-                    j["match_score"] = ranking.professional_score
-                    j["alignment_reason"] = ranking.alignment_reason
-                    # Update fields with refined data from LLM
-                    j["title"] = ranking.original_title # Use the exact original title
-                    j["company"] = ranking.refined_company
-                    j["location"] = ranking.refined_location
-                    j["description"] = ranking.refined_description
-                    if ranking.refined_salary: j["salary"] = ranking.refined_salary
-                    if ranking.refined_type: j["type"] = ranking.refined_type
+                    j["match_score"] = ranking.get("match_score", 0)
+                    j["alignment_reason"] = ranking.get("reason", "Good match")
+                    j["title"] = ranking.get("refined_title", j["title"])
+                    j["company"] = ranking.get("refined_company", j["company"])
+                    j["location"] = ranking.get("refined_location", j["location"])
+                    if ranking.get("refined_salary"): j["salary"] = ranking.get("refined_salary")
                     
                     final_recommendations.append(j)
             
             # Sort by professional score
             final_recommendations.sort(key=lambda x: x["match_score"], reverse=True)
             
-            print(f"[AGENT DEBUG] Ranking completed with Pydantic parser. Top job: {final_recommendations[0]['title'] if final_recommendations else 'None'}")
+            print(f"[AGENT DEBUG] Ranking completed instantly. Top job: {final_recommendations[0]['title'] if final_recommendations else 'None'}")
             
             return {
-                "final_recommendations": final_recommendations[:10], # Return top 10
+                "final_recommendations": final_recommendations,
                 "status": "completed"
             }
         except Exception as e:
             print(f"[AGENT DEBUG] Error in ranking: {e}")
-            traceback.print_exc()
-            # Fallback: just return the combined results sorted by their original scores
+            # Fallback
             jobs.sort(key=lambda x: x.get('match_score', 0), reverse=True)
             return {
-                "final_recommendations": jobs[:10],
+                "final_recommendations": jobs[:5],
                 "status": "completed_fallback"
             }
 
@@ -405,14 +407,16 @@ class JobRecommenderAgent:
         return text
 
     # --- Public Access ---
-    async def get_recommendations(self, user_id: str, recruiter_id: str) -> List[Dict[str, Any]]:
+    async def get_recommendations(self, user_id: str, recruiter_id: str, exclude_ids: List[str] = []) -> List[Dict[str, Any]]:
         print(f"\n[AGENT DEBUG] STARTING AGENT for User: {user_id}")
         initial_state = {
             "user_id": user_id,
             "recruiter_id": recruiter_id,
             "user_data": {},
             "assessment_data": {},
+            "assessment_data": {},
             "nearby_area": "",
+            "exclude_ids": exclude_ids,
             "planning_strategy": "",
             "search_queries": [],
             "internal_jobs": [],

@@ -247,12 +247,12 @@ Return ONLY a JSON object: {{"Job Title": 85, ...}}
                 
         return external_jobs
 
-    async def recommend_jobs(self, user_id: str, recruiter_id: str, include_external: bool = True) -> List[Dict[str, Any]]:
+    async def recommend_jobs(self, user_id: str, recruiter_id: str, include_external: bool = True, exclude_ids: List[str] = []) -> List[Dict[str, Any]]:
         """Get recommendations using the professional LangGraph agent."""
         
         try:
             # Use the new agentic system
-            recommendations = await self.agent.get_recommendations(user_id, recruiter_id)
+            recommendations = await self.agent.get_recommendations(user_id, recruiter_id, exclude_ids)
             
             # Filter external if requested (though agent usually includes them)
             if not include_external:

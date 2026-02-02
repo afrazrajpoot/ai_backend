@@ -12,6 +12,7 @@ import json
 class RecommendationRequest(BaseModel):
     recruiter_id: str
     employee_id: str
+    exclude_ids: list[str] = []
 
 class DashboardController:
     @staticmethod
@@ -144,7 +145,7 @@ class DashboardController:
                 )
 
             recommendation_service = JobRecommendationService()
-            recommendations = await recommendation_service.recommend_jobs(employee_id, recruiter_id)
+            recommendations = await recommendation_service.recommend_jobs(employee_id, recruiter_id, exclude_ids=data.exclude_ids)
             
             if not recommendations:
                 return {

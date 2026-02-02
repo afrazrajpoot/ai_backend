@@ -196,7 +196,7 @@ class ExternalJobFetcher:
     using Tavily search and LLM-based extraction.
     """
     def __init__(self):
-        self.tavily = TavilySearchResults(max_results=5)
+        self.tavily = TavilySearchResults(max_results=12)
         self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2)
         
         # --- Prompts ---
@@ -274,7 +274,7 @@ Instructions:
             # Prepare text for LLM extraction
             jobs_text = "\n\n".join([
                 f"Title: {r.get('title','')}\nURL: {r.get('url','')}\nContent: {r.get('content','')[:500]}"
-                for r in raw_results[:3]
+                for r in raw_results[:10]
                 if isinstance(r, dict) and r.get('title')
             ])
             
@@ -292,7 +292,7 @@ Instructions:
 
             # Create jobs using raw data titles instead of LLM extracted titles
             formatted_jobs = []
-            for raw_result in raw_results[:3]:  # Use first 3 raw results
+            for raw_result in raw_results[:10]:  # Use first 10 raw results
                 if not isinstance(raw_result, dict): continue
 
                 raw_title = raw_result.get("title", "")
@@ -357,11 +357,18 @@ Instructions:
         
         # Create tasks for parallel execution
         tasks = []
-        for i, query in enumerate(queries):
-            # Rotate through sites for each query
-            site = sites[i % len(sites)]
-            # We need to run the synchronous _fetch_with_query in a thread to avoid blocking
-            tasks.append(asyncio.to_thread(self._fetch_with_query, query, site, target_skills))
+        
+        # If only 1 query, search top 2 sites to guarantee results
+        if len(queries) == 1:
+            query = queries[0]
+            for site in sites[:2]: # Search Indeed and LinkedIn
+                 tasks.append(asyncio.to_thread(self._fetch_with_query, query, site, target_skills))
+        else:
+            for i, query in enumerate(queries):
+                # Rotate through sites for each query
+                site = sites[i % len(sites)]
+                # We need to run the synchronous _fetch_with_query in a thread to avoid blocking
+                tasks.append(asyncio.to_thread(self._fetch_with_query, query, site, target_skills))
         
         # Run all searches in parallel
         results = await asyncio.gather(*tasks, return_exceptions=True)

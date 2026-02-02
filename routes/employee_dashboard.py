@@ -1,12 +1,8 @@
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
-from controllers.employee_dashboard import DashboardController
+from controllers.employee_dashboard import DashboardController, RecommendationRequest
 from utils.models import EmployeeRequest
 router = APIRouter(prefix="/employee_dashboard", tags=["employee_dashboard"])
-
-class RecommendationRequest(BaseModel):
-    employee_id: str
-    recruiter_id: str
 
 @router.get("/")
 async def get_dashboard(userId: str = Query(..., description="User ID")):
