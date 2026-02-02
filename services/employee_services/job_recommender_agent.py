@@ -175,10 +175,10 @@ class JobRecommenderAgent:
             TASK:
             1. AUDIT: Perform a mandatory check of ALL skills provided in the USER PROFILE.
             2. CLUSTER: Identify ALL distinct skill clusters. (e.g., Web Development, Data Science, Backend/Java, Creative/Design, Video Editing, etc.).
-            3. DISTRIBUTE: Generate 10 targeted search queries. 
-               - CRITICAL RULE: You MUST allocate queries across EVERY cluster identified. 
-               - PROPORTIONALITY: Do not let one cluster (like JavaScript) take up more than 3 queries. 
-               - COVERAGE: Even if a skill seems secondary (like Photoshop or Video Editing), you MUST generate at least one dedicated query for it (e.g., "Graphic Designer Photoshop" or "Video Editor").
+            3. DISTRIBUTE: Generate 3 targeted search queries. 
+               - CRITICAL RULE: You MUST allocate queries across the most important skill clusters. 
+               - PROPORTIONALITY: Do not let one cluster take up more than 2 queries. 
+               - COVERAGE: Focus on the primary skills.
                - Each query should contain a skill and a job title.
                - If location is "{location}" and it equals "Global", ignore it or use "Remote".
                - Otherwise, include the "{location}" in the queries where appropriate.
@@ -237,7 +237,7 @@ class JobRecommenderAgent:
             # Parallel tasks
             tasks = [
                 self.internal_fetcher.fetch_jobs(queries[0] if queries else "", recruiter_id),
-                self.external_fetcher.fetch_with_queries(queries[:10], skills) # Increased to 10 queries
+                self.external_fetcher.fetch_with_queries(queries[:3], skills) # Reduced to 3 queries for speed
             ]
             
             results = await asyncio.gather(*tasks)
@@ -290,7 +290,7 @@ class JobRecommenderAgent:
             # Prepare jobs preview for LLM
             jobs_preview = "\n".join([
                 f"ID: {j['id']} | Title: {j['title']} | Co: {j['company']} | Loc: {j['location']} | Sal: {j.get('salary', 'N/A')} | Full_Text: {j['description'][:400]}"
-                for j in jobs[:60] # Increased to score top 60
+                for j in jobs[:20] # Reduced to score top 20 for speed
             ])
 
             parser = PydanticOutputParser(pydantic_object=JobRankingList)
@@ -313,7 +313,7 @@ class JobRecommenderAgent:
                    - SKILL MATCH: How well the job requirements match the user's technical skills.
                    - EXPERIENCE MATCH: How well the seniority and responsibilities match the user's background.
                 2. Calculate a 0-100 score based on overall profile alignment.
-                3. CRITICAL: Ensure the final ranked list is DIVERSE. Do not fill the list with only one type of job (e.g., only React). If the user has multiple skill clusters (like Web and Data Science), include the best matches from EACH cluster in the top 20.
+                3. CRITICAL: Ensure the final ranked list is DIVERSE. Do not fill the list with only one type of job (e.g., only React). If the user has multiple skill clusters (like Web and Data Science), include the best matches from EACH cluster in the top 10.
                 4. Extract and refine the following fields:
                    - TITLE: Use the EXACT title provided in the JOBS LIST. Do not "clean" or change it.
                    - COMPANY: Find the actual company name from the Full_Text (essential if Co is 'Unknown').
@@ -323,7 +323,7 @@ class JobRecommenderAgent:
                 5. Provide a brief "Why this fits" reason for the top 5 jobs.
                 6. {format_instructions}
                 
-                Return only the top 20 jobs in ranked order.
+                Return only the top 10 jobs in ranked order.
                 """,
                 partial_variables={"format_instructions": parser.get_format_instructions()}
             )
@@ -361,7 +361,7 @@ class JobRecommenderAgent:
             print(f"[AGENT DEBUG] Ranking completed with Pydantic parser. Top job: {final_recommendations[0]['title'] if final_recommendations else 'None'}")
             
             return {
-                "final_recommendations": final_recommendations[:20], # Return top 20
+                "final_recommendations": final_recommendations[:10], # Return top 10
                 "status": "completed"
             }
         except Exception as e:
@@ -370,7 +370,7 @@ class JobRecommenderAgent:
             # Fallback: just return the combined results sorted by their original scores
             jobs.sort(key=lambda x: x.get('match_score', 0), reverse=True)
             return {
-                "final_recommendations": jobs[:20],
+                "final_recommendations": jobs[:10],
                 "status": "completed_fallback"
             }
 

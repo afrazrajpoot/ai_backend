@@ -250,11 +250,11 @@ Instructions:
             response = self.llm.invoke(self.query_gen_prompt.format(
                 skills=", ".join(skills),
                 positions=", ".join(positions),
-                num_queries=5
+                num_queries=3
             ))
             queries = self._extract_json_from_response(response.content)
             if queries and isinstance(queries, list):
-                return queries[:5]
+                return queries[:3]
         except Exception as e:
             pass
         
@@ -274,7 +274,7 @@ Instructions:
             # Prepare text for LLM extraction
             jobs_text = "\n\n".join([
                 f"Title: {r.get('title','')}\nURL: {r.get('url','')}\nContent: {r.get('content','')[:500]}"
-                for r in raw_results[:5]
+                for r in raw_results[:3]
                 if isinstance(r, dict) and r.get('title')
             ])
             
@@ -292,7 +292,7 @@ Instructions:
 
             # Create jobs using raw data titles instead of LLM extracted titles
             formatted_jobs = []
-            for raw_result in raw_results[:5]:  # Use first 5 raw results
+            for raw_result in raw_results[:3]:  # Use first 3 raw results
                 if not isinstance(raw_result, dict): continue
 
                 raw_title = raw_result.get("title", "")
